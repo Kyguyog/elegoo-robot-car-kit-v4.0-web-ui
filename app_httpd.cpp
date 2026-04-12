@@ -310,7 +310,6 @@ const char CONTROL_PAGE[] PROGMEM = R"HTML(
         <a class="nav-button" href="/network-settings">Open Network Settings</a>
         <a class="nav-button" href="/update">Open OTA Update</a>
       </div>
-      <p>Drive from this page, and use the separate network page to inspect connection status, scan nearby Wi-Fi, and switch between STA and AP.</p>
     </section>
 
     <div class="grid">
@@ -325,7 +324,6 @@ const char CONTROL_PAGE[] PROGMEM = R"HTML(
           </div>
           <button class="key danger stop-button" id="stopButton" type="button">STOP</button>
         </div>
-        <div class="hint">Drag the joystick to steer. Keyboard still supports <code>W A S D</code>, arrow keys, and <code>X</code> for stop. Controller support is unchanged.</div>
         <div class="row">
           <input id="speed" type="range" min="0" max="255" value="180">
           <div class="value">Speed: <span id="speedValue">180</span></div>
