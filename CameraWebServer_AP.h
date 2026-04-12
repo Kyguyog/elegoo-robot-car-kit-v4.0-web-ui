@@ -1,0 +1,32 @@
+/*
+ * @Descripttion: 
+ * @version: 
+ * @Author: Elegoo
+ * @Date: 2020-06-04 11:42:27
+ * @LastEditors: Changhua
+ * @LastEditTime: 2020-07-23 14:21:48
+ */
+
+#ifndef _CameraWebServer_AP_H
+#define _CameraWebServer_AP_H
+#include <WiFi.h>
+#include "config.h"
+
+class CameraWebServer_AP
+{
+
+public:
+  void CameraWebServer_AP_Init(void);
+  String wifi_name;
+
+private:
+  // const char *ssid = "ESP32_CAM";
+  // const char *password = "elegoo2020";
+  // char *ssid = "UMRT-CAR-";
+  char *ssid = WIFI_SSID;
+  //char *password = "elegoo2020";
+  // char *password = "";
+  char *password = WIFI_PWD;
+};
+
+#endif
