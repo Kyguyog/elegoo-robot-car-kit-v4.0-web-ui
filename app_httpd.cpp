@@ -225,7 +225,7 @@ const char CONTROL_PAGE[] PROGMEM = R"HTML(
           <button class="key accent" data-key="s">S</button>
           <div></div>
         </div>
-        <div class="hint">Keyboard shortcuts: <code>W A S D</code> and <code>X</code> for stop.</div>
+        <div class="hint">Keyboard: <code>W A S D</code>, arrow keys, and <code>X</code> for stop. Controller: left stick turns, triggers drive, D-pad up/down changes speed, shoulders stop.</div>
         <div class="row">
           <input id="speed" type="range" min="0" max="255" value="180">
           <div class="value">Speed: <span id="speedValue">180</span></div>
@@ -278,7 +278,7 @@ const char CONTROL_PAGE[] PROGMEM = R"HTML(
       button.classList.remove('active');
     }
 
-    const keyState = {
+    const keyboardState = {
       w: false,
       a: false,
       s: false,
@@ -286,43 +286,54 @@ const char CONTROL_PAGE[] PROGMEM = R"HTML(
     };
 
     let lastDrivePayload = '';
+    let gamepadActive = false;
+    let lastGamepadSignature = '';
+    let lastDpadAdjustTime = 0;
 
-    function buildDriveCommand() {
-      const speed = Number(speedEl.value);
-
-      if (keyState.w) {
-        if (keyState.a && !keyState.d) {
+    function buildDriveCommand(forward, reverse, left, right, speed) {
+      if (forward) {
+        if (left && !right) {
           return { N: 102, D1: 5, D2: speed };
         }
-        if (!keyState.a && keyState.d) {
+        if (!left && right) {
           return { N: 102, D1: 7, D2: speed };
         }
         return { N: 102, D1: 1, D2: speed };
       }
 
-      if (keyState.s) {
-        if (keyState.a && !keyState.d) {
+      if (reverse) {
+        if (left && !right) {
           return { N: 102, D1: 6, D2: speed };
         }
-        if (!keyState.a && keyState.d) {
+        if (!left && right) {
           return { N: 102, D1: 8, D2: speed };
         }
         return { N: 102, D1: 2, D2: speed };
       }
 
-      if (keyState.a && !keyState.d) {
+      if (left && !right) {
         return { N: 102, D1: 3, D2: speed };
       }
 
-      if (!keyState.a && keyState.d) {
+      if (!left && right) {
         return { N: 102, D1: 4, D2: speed };
       }
 
       return { H: 1, N: 1, D1: 0, D2: 0, D3: 1 };
     }
 
-    async function syncDriveCommand() {
-      const payload = JSON.stringify(buildDriveCommand());
+    function buildKeyboardDriveCommand() {
+      return buildDriveCommand(
+        keyboardState.w,
+        keyboardState.s,
+        keyboardState.a,
+        keyboardState.d,
+        Number(speedEl.value)
+      );
+    }
+
+    async function syncDriveCommand(commandObject = null) {
+      const payload = JSON.stringify(commandObject || buildKeyboardDriveCommand());
       if (payload === lastDrivePayload) {
         return;
       }
@@ -331,19 +342,23 @@ const char CONTROL_PAGE[] PROGMEM = R"HTML(
     }
 
     async function handleDriveKeyDown(key) {
-      if (!Object.prototype.hasOwnProperty.call(keyState, key)) {
+      if (!Object.prototype.hasOwnProperty.call(keyboardState, key)) {
         return;
       }
-      keyState[key] = true;
-      await syncDriveCommand();
+      keyboardState[key] = true;
+      if (!gamepadActive) {
+        await syncDriveCommand();
+      }
     }
 
     async function handleDriveKeyUp(key) {
-      if (!Object.prototype.hasOwnProperty.call(keyState, key)) {
+      if (!Object.prototype.hasOwnProperty.call(keyboardState, key)) {
         return;
       }
-      keyState[key] = false;
-      await syncDriveCommand();
+      keyboardState[key] = false;
+      if (!gamepadActive) {
+        await syncDriveCommand();
+      }
     }
 
     async function sendImmediateCommand(payloadObject, label) {
@@ -351,6 +366,95 @@ const char CONTROL_PAGE[] PROGMEM = R"HTML(
       lastDrivePayload = payload;
       await sendJson(payload);
       setLog(label);
+    }
+
+    function normalizeKeyboardKey(key) {
+      const normalized = key.toLowerCase();
+      if (normalized === 'arrowup') return 'w';
+      if (normalized === 'arrowleft') return 'a';
+      if (normalized === 'arrowdown') return 's';
+      if (normalized === 'arrowright') return 'd';
+      return normalized;
+    }
+
+    function clampSpeed(value) {
+      return Math.max(0, Math.min(255, value));
+    }
+
+    function updateSpeedDisplay() {
+      speedValueEl.textContent = speedEl.value;
+    }
+
+    function setSpeedValue(nextSpeed) {
+      speedEl.value = String(clampSpeed(nextSpeed));
+      updateSpeedDisplay();
+    }
+
+    function buildGamepadCommand(gamepad) {
+      const leftX = gamepad.axes[0] || 0;
+      const leftTrigger = gamepad.buttons[6] ? gamepad.buttons[6].value : 0;
+      const rightTrigger = gamepad.buttons[7] ? gamepad.buttons[7].value : 0;
+      const shoulderStop = (gamepad.buttons[4] && gamepad.buttons[4].pressed) || (gamepad.buttons[5] && gamepad.buttons[5].pressed);
+
+      if (shoulderStop) {
+        return {
+          active: true,
+          command: { H: 1, N: 1, D1: 0, D2: 0, D3: 1 },
+          signature: 'stop'
+        };
+      }
+
+      const deadzone = 0.35;
+      const triggerDeadzone = 0.15;
+      const left = leftX < -deadzone;
+      const right = leftX > deadzone;
+      const forward = rightTrigger > triggerDeadzone;
+      const reverse = leftTrigger > triggerDeadzone;
+
+      const active = left || right || forward || reverse;
+      const signature = `${forward ? 1 : 0}${reverse ? 1 : 0}${left ? 1 : 0}${right ? 1 : 0}`;
+
+      return {
+        active,
+        command: buildDriveCommand(forward, reverse, left, right, Number(speedEl.value)),
+        signature
+      };
+    }
+
+    function pollGamepad() {
+      const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
+      const gamepad = gamepads && gamepads[0];
+
+      if (gamepad) {
+        const now = Date.now();
+        if (gamepad.buttons[12] && gamepad.buttons[12].pressed && now - lastDpadAdjustTime > 180) {
+          setSpeedValue(Number(speedEl.value) + 10);
+          lastDpadAdjustTime = now;
+        } else if (gamepad.buttons[13] && gamepad.buttons[13].pressed && now - lastDpadAdjustTime > 180) {
+          setSpeedValue(Number(speedEl.value) - 10);
+          lastDpadAdjustTime = now;
+        }
+
+        const state = buildGamepadCommand(gamepad);
+
+        if (state.active) {
+          gamepadActive = true;
+          if (state.signature !== lastGamepadSignature || JSON.stringify(state.command) !== lastDrivePayload) {
+            lastGamepadSignature = state.signature;
+            syncDriveCommand(state.command).catch((error) => setLog(error.message, true));
+          }
+        } else if (gamepadActive) {
+          gamepadActive = false;
+          lastGamepadSignature = '';
+          syncDriveCommand().catch((error) => setLog(error.message, true));
+        }
+      } else if (gamepadActive) {
+        gamepadActive = false;
+        lastGamepadSignature = '';
+        syncDriveCommand().catch((error) => setLog(error.message, true));
+      }
+
+      window.requestAnimationFrame(pollGamepad);
     }
 
     document.querySelectorAll('[data-key]').forEach((button) => {
@@ -405,7 +509,7 @@ const char CONTROL_PAGE[] PROGMEM = R"HTML(
         return;
       }
 
-      const key = event.key.toLowerCase();
+      const key = normalizeKeyboardKey(event.key);
       const allowed = ['w', 'a', 's', 'd', 'x'];
       if (!allowed.includes(key)) {
         return;
@@ -423,7 +527,7 @@ const char CONTROL_PAGE[] PROGMEM = R"HTML(
     });
 
     document.addEventListener('keyup', async (event) => {
-      const key = event.key.toLowerCase();
+      const key = normalizeKeyboardKey(event.key);
       if (!['w', 'a', 's', 'd'].includes(key)) {
         return;
       }
@@ -436,13 +540,25 @@ const char CONTROL_PAGE[] PROGMEM = R"HTML(
     });
 
     speedEl.addEventListener('input', () => {
-      speedValueEl.textContent = speedEl.value;
-      if (keyState.w || keyState.a || keyState.s || keyState.d) {
+      updateSpeedDisplay();
+      if (!gamepadActive && (keyboardState.w || keyboardState.a || keyboardState.s || keyboardState.d)) {
         syncDriveCommand().catch((error) => setLog(error.message, true));
       }
     });
 
+    window.addEventListener('gamepadconnected', (event) => {
+      setLog(`Controller connected: ${event.gamepad.id}`);
+    });
+
+    window.addEventListener('gamepaddisconnected', () => {
+      gamepadActive = false;
+      lastGamepadSignature = '';
+      setLog('Controller disconnected', true);
+    });
+
     refreshStatus();
+    updateSpeedDisplay();
+    window.requestAnimationFrame(pollGamepad);
     setInterval(refreshStatus, 3000);
   </script>
 </body>
