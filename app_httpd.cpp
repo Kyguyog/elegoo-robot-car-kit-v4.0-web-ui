@@ -14,7 +14,7 @@ const char CONTROL_PAGE[] PROGMEM = R"HTML(
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>UMRT Control</title>
+  <title>Car Control</title>
   <style>
     :root {
       --bg: #101820;
