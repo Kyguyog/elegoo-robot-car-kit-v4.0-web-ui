@@ -211,6 +211,17 @@ bool saveControlNetworkSettings(
   return true;
 }
 
+bool toggleConfiguredNetworkMode(String &message) {
+  const String nextMode = g_preferred_mode == "ap" ? "sta" : "ap";
+  return saveControlNetworkSettings(
+    nextMode,
+    g_sta_ssid,
+    g_sta_password,
+    buildFallbackApName(),
+    g_ap_password,
+    message);
+}
+
 void CameraWebServer_AP::CameraWebServer_AP_Init(void) {
   Serial.setDebugOutput(true);
 

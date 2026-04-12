@@ -30,6 +30,7 @@ bool saveControlNetworkSettings(
   const String &apSsid,
   const String &apPassword,
   String &message);
+bool toggleConfiguredNetworkMode(String &message);
 
 class CameraWebServer_AP
 {
