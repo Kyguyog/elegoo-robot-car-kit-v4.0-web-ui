@@ -2,6 +2,7 @@
 #include "Arduino.h"
 #include <Update.h>
 #include "esp_http_server.h"
+#include "CameraWebServer_AP.h"
 
 namespace {
 
@@ -79,7 +80,7 @@ const char CONTROL_PAGE[] PROGMEM = R"HTML(
 
     .stats {
       display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
       gap: 12px;
       margin-top: 18px;
     }
@@ -187,6 +188,29 @@ const char CONTROL_PAGE[] PROGMEM = R"HTML(
       cursor: pointer;
     }
 
+    .field {
+      margin-top: 14px;
+    }
+
+    .field label {
+      display: block;
+      margin-bottom: 6px;
+      font-size: 13px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    input[type="text"], input[type="password"], select {
+      width: 100%;
+      min-height: 46px;
+      padding: 10px 12px;
+      border-radius: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      background: #0d141b;
+      color: var(--text);
+    }
+
     .hint, .log {
       margin-top: 12px;
       font-size: 14px;
@@ -210,22 +234,10 @@ const char CONTROL_PAGE[] PROGMEM = R"HTML(
     <section class="hero">
       <h1>UMRT Robot Control</h1>
       <div class="row">
+        <a class="nav-button" href="/network-settings">Open Network Settings</a>
         <a class="nav-button" href="/update">Open OTA Update</a>
       </div>
-      <div class="stats">
-        <div class="stat">
-          <div class="label">SSID</div>
-          <div class="value" id="ssid">Loading...</div>
-        </div>
-        <div class="stat">
-          <div class="label">IP</div>
-          <div class="value" id="ip">Loading...</div>
-        </div>
-        <div class="stat">
-          <div class="label">Clients</div>
-          <div class="value" id="clients">0</div>
-        </div>
-      </div>
+      <p>Drive from this page, and use the separate network page to inspect connection status, scan nearby Wi-Fi, and switch between STA and AP.</p>
     </section>
 
     <div class="grid">
@@ -260,18 +272,6 @@ const char CONTROL_PAGE[] PROGMEM = R"HTML(
     function setLog(message, isError = false) {
       logEl.textContent = message;
       logEl.style.color = isError ? '#ff8da1' : '#2ec4b6';
-    }
-
-    async function refreshStatus() {
-      try {
-        const response = await fetch('/status');
-        const status = await response.json();
-        document.getElementById('ssid').textContent = status.ssid;
-        document.getElementById('ip').textContent = status.ip;
-        document.getElementById('clients').textContent = status.clients;
-      } catch (error) {
-        setLog('Status refresh failed', true);
-      }
     }
 
     async function sendJson(payload) {
@@ -606,10 +606,347 @@ const char CONTROL_PAGE[] PROGMEM = R"HTML(
       setLog('Controller disconnected', true);
     });
 
-    refreshStatus();
     updateSpeedDisplay();
     window.requestAnimationFrame(pollGamepad);
-    setInterval(refreshStatus, 3000);
+  </script>
+</body>
+</html>
+)HTML";
+
+const char NETWORK_PAGE[] PROGMEM = R"HTML(
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>UMRT Network Settings</title>
+  <style>
+    :root {
+      --bg: #101820;
+      --panel: #17212b;
+      --panel-2: #223142;
+      --accent: #ff6b35;
+      --text: #f4f7fb;
+      --muted: #9db0c2;
+      --ok: #2ec4b6;
+      --bad: #ff6b6b;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: Arial, Helvetica, sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at top, rgba(46, 196, 182, 0.12), transparent 30%),
+        linear-gradient(180deg, #0b1218, var(--bg));
+      padding: 20px 16px 36px;
+    }
+    .wrap {
+      max-width: 960px;
+      margin: 0 auto;
+    }
+    .panel {
+      background: rgba(23, 33, 43, 0.94);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 18px;
+      padding: 22px;
+      box-shadow: 0 20px 50px rgba(0,0,0,0.25);
+      margin-bottom: 16px;
+    }
+    h1 {
+      margin: 0 0 10px;
+      font-size: 30px;
+    }
+    p {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+    .row {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+      margin-top: 16px;
+    }
+    .nav-button, button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 46px;
+      padding: 0 16px;
+      border: 0;
+      border-radius: 12px;
+      font: inherit;
+      font-weight: 700;
+      color: #fff;
+      background: linear-gradient(180deg, #ff874f, var(--accent));
+      text-decoration: none;
+      cursor: pointer;
+    }
+    .secondary {
+      background: linear-gradient(180deg, #31475c, #223142);
+    }
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 12px;
+      margin-top: 18px;
+    }
+    .stat {
+      background: var(--panel-2);
+      border-radius: 14px;
+      padding: 12px;
+    }
+    .label {
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+    }
+    .value {
+      margin-top: 6px;
+      font-size: 18px;
+      font-weight: 700;
+      word-break: break-word;
+    }
+    .field {
+      margin-top: 14px;
+    }
+    .field label {
+      display: block;
+      margin-bottom: 6px;
+      font-size: 13px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    input[type="text"], input[type="password"], select {
+      width: 100%;
+      min-height: 46px;
+      padding: 10px 12px;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,0.1);
+      background: #0d141b;
+      color: var(--text);
+      font: inherit;
+    }
+    .hint, .log {
+      margin-top: 12px;
+      font-size: 14px;
+      color: var(--muted);
+    }
+    .log {
+      min-height: 22px;
+      color: var(--ok);
+    }
+    .bad { color: var(--bad); }
+    @media (max-width: 640px) {
+      h1 { font-size: 26px; }
+      .stats { grid-template-columns: 1fr; }
+      .row > * { width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <section class="panel">
+      <h1>Network Settings</h1>
+      <p>Inspect the current connection, scan nearby Wi-Fi networks, and choose whether the robot should boot in STA or AP mode.</p>
+      <div class="row">
+        <a class="nav-button secondary" href="/">Back to Control</a>
+        <a class="nav-button secondary" href="/update">Open OTA Update</a>
+        <button id="refreshNetworks" type="button">Scan Nearby Networks</button>
+      </div>
+      <div class="stats">
+        <div class="stat">
+          <div class="label">SSID</div>
+          <div class="value" id="ssid">Loading...</div>
+        </div>
+        <div class="stat">
+          <div class="label">IP</div>
+          <div class="value" id="ip">Loading...</div>
+        </div>
+        <div class="stat">
+          <div class="label">Host</div>
+          <div class="value" id="host">Loading...</div>
+        </div>
+        <div class="stat">
+          <div class="label">Clients</div>
+          <div class="value" id="clients">0</div>
+        </div>
+        <div class="stat">
+          <div class="label">Mode</div>
+          <div class="value" id="mode">Loading...</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="label">Saved Settings</div>
+      <div class="hint">The STA password and AP password fields are prefilled with the currently saved values. Saving restarts the board to apply the new network settings.</div>
+      <div class="field">
+        <label for="bootMode">Boot Mode</label>
+        <select id="bootMode">
+          <option value="sta">STA</option>
+          <option value="ap">AP</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="staSsid">STA SSID</label>
+        <select id="staSsid"></select>
+      </div>
+      <div class="field">
+        <label for="staPassword">STA Password</label>
+        <input id="staPassword" type="text" autocomplete="off" spellcheck="false">
+      </div>
+      <div class="field">
+        <label for="apSsid">AP SSID</label>
+        <input id="apSsid" type="text" autocomplete="off" spellcheck="false">
+      </div>
+      <div class="field">
+        <label for="apPassword">AP Password</label>
+        <input id="apPassword" type="text" autocomplete="off" spellcheck="false">
+      </div>
+      <div class="row">
+        <button id="saveNetwork" type="button">Save Network Settings</button>
+      </div>
+      <div class="log" id="networkLog"></div>
+    </section>
+  </div>
+
+  <script>
+    const ssidEl = document.getElementById('ssid');
+    const ipEl = document.getElementById('ip');
+    const hostEl = document.getElementById('host');
+    const clientsEl = document.getElementById('clients');
+    const modeEl = document.getElementById('mode');
+    const bootModeEl = document.getElementById('bootMode');
+    const staSsidEl = document.getElementById('staSsid');
+    const staPasswordEl = document.getElementById('staPassword');
+    const apSsidEl = document.getElementById('apSsid');
+    const apPasswordEl = document.getElementById('apPassword');
+    const networkLogEl = document.getElementById('networkLog');
+    const refreshNetworksButton = document.getElementById('refreshNetworks');
+    const saveNetworkButton = document.getElementById('saveNetwork');
+
+    function setNetworkLog(message, isError = false) {
+      networkLogEl.textContent = message;
+      networkLogEl.className = `log${isError ? ' bad' : ''}`;
+    }
+
+    function fillStaOptions(networks, selectedValue) {
+      const options = [];
+      const seen = new Set();
+
+      if (selectedValue) {
+        options.push(selectedValue);
+        seen.add(selectedValue);
+      }
+
+      networks.forEach((network) => {
+        if (network && !seen.has(network)) {
+          options.push(network);
+          seen.add(network);
+        }
+      });
+
+      staSsidEl.innerHTML = '';
+      if (options.length === 0) {
+        const option = document.createElement('option');
+        option.value = '';
+        option.textContent = 'No networks found';
+        staSsidEl.appendChild(option);
+        return;
+      }
+
+      options.forEach((network) => {
+        const option = document.createElement('option');
+        option.value = network;
+        option.textContent = network;
+        staSsidEl.appendChild(option);
+      });
+
+      staSsidEl.value = selectedValue || options[0];
+    }
+
+    async function refreshNetworkPage() {
+      const response = await fetch('/network');
+      const status = await response.json();
+
+      ssidEl.textContent = status.ssid;
+      ipEl.textContent = status.ip;
+      hostEl.textContent = status.host;
+      clientsEl.textContent = status.clients;
+      modeEl.textContent = status.mode;
+
+      bootModeEl.value = status.configured_mode;
+      fillStaOptions(status.networks || [], status.sta_ssid);
+      staPasswordEl.value = status.sta_password || '';
+      apSsidEl.value = status.ap_ssid || '';
+      apPasswordEl.value = status.ap_password || '';
+    }
+
+    async function scanNetworks() {
+      refreshNetworksButton.disabled = true;
+      setNetworkLog('Scanning nearby Wi-Fi networks...');
+      try {
+        const response = await fetch('/scan_networks');
+        const result = await response.json();
+        if (!response.ok || !result.ok) {
+          throw new Error(result.message || `Scan failed: ${response.status}`);
+        }
+        fillStaOptions(result.networks || [], staSsidEl.value);
+        setNetworkLog(`Found ${result.networks.length} nearby network${result.networks.length === 1 ? '' : 's'}.`);
+      } catch (error) {
+        setNetworkLog(error.message, true);
+      } finally {
+        refreshNetworksButton.disabled = false;
+      }
+    }
+
+    async function saveNetworkSettings() {
+      const body = new URLSearchParams({
+        mode: bootModeEl.value,
+        sta_ssid: staSsidEl.value,
+        sta_password: staPasswordEl.value,
+        ap_ssid: apSsidEl.value,
+        ap_password: apPasswordEl.value
+      });
+
+      saveNetworkButton.disabled = true;
+      setNetworkLog('Saving network settings...');
+
+      try {
+        const response = await fetch('/network', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+          body: body.toString()
+        });
+        const result = await response.json();
+        if (!response.ok || !result.ok) {
+          throw new Error(result.message || `Save failed: ${response.status}`);
+        }
+        setNetworkLog(result.message || 'Saved. Device is rebooting.');
+      } catch (error) {
+        setNetworkLog(error.message, true);
+      } finally {
+        saveNetworkButton.disabled = false;
+      }
+    }
+
+    refreshNetworksButton.addEventListener('click', () => {
+      scanNetworks().catch((error) => setNetworkLog(error.message, true));
+    });
+
+    saveNetworkButton.addEventListener('click', () => {
+      saveNetworkSettings().catch((error) => setNetworkLog(error.message, true));
+    });
+
+    refreshNetworkPage()
+      .then(() => setNetworkLog('Loaded current network settings.'))
+      .catch((error) => setNetworkLog(error.message, true));
   </script>
 </body>
 </html>
@@ -689,7 +1026,7 @@ const char UPDATE_PAGE[] PROGMEM = R"HTML(
 <body>
   <main class="panel">
     <h1>OTA Update</h1>
-    <p>Select the compiled firmware <code>.bin</code> file and upload it directly from your phone while connected to the robot AP.</p>
+    <p>Select the compiled firmware <code>.bin</code> file and upload it directly from your phone while connected to the robot over Wi-Fi.</p>
     <input id="firmware" type="file" accept=".bin,application/octet-stream">
     <button id="upload">Upload Firmware</button>
     <progress id="progress" value="0" max="100" hidden></progress>
@@ -758,6 +1095,100 @@ void setCorsHeaders(httpd_req_t *req) {
   httpd_resp_set_hdr(req, "Access-Control-Allow-Headers", "Content-Type");
 }
 
+String urlDecode(const char *value) {
+  String decoded;
+  if (value == NULL) {
+    return decoded;
+  }
+
+  for (size_t i = 0; value[i] != '\0'; ++i) {
+    const char current = value[i];
+    if (current == '+') {
+      decoded += ' ';
+      continue;
+    }
+
+    if (current == '%' && value[i + 1] != '\0' && value[i + 2] != '\0') {
+      char hex[3] = {value[i + 1], value[i + 2], '\0'};
+      decoded += static_cast<char>(strtol(hex, NULL, 16));
+      i += 2;
+      continue;
+    }
+
+    decoded += current;
+  }
+
+  return decoded;
+}
+
+String jsonEscape(const String &value) {
+  String escaped;
+  escaped.reserve(value.length() + 8);
+  for (size_t i = 0; i < value.length(); ++i) {
+    const char current = value[i];
+    switch (current) {
+      case '\\': escaped += "\\\\"; break;
+      case '"': escaped += "\\\""; break;
+      case '\n': escaped += "\\n"; break;
+      case '\r': escaped += "\\r"; break;
+      case '\t': escaped += "\\t"; break;
+      default: escaped += current; break;
+    }
+  }
+  return escaped;
+}
+
+bool readRequestBody(httpd_req_t *req, String &body, size_t maxLen) {
+  if (req->content_len <= 0 || req->content_len > static_cast<int>(maxLen)) {
+    return false;
+  }
+
+  body.reserve(req->content_len);
+  int remaining = req->content_len;
+  while (remaining > 0) {
+    char chunk[128];
+    const int to_read = remaining > static_cast<int>(sizeof(chunk) - 1) ? sizeof(chunk) - 1 : remaining;
+    const int received = httpd_req_recv(req, chunk, to_read);
+    if (received <= 0) {
+      if (received == HTTPD_SOCK_ERR_TIMEOUT) {
+        httpd_resp_send_408(req);
+      }
+      return false;
+    }
+
+    chunk[received] = '\0';
+    body += chunk;
+    remaining -= received;
+  }
+
+  return true;
+}
+
+String scanNetworksJsonArray() {
+  String json = "[";
+  const int found = WiFi.scanNetworks();
+  bool first = true;
+
+  for (int i = 0; i < found; ++i) {
+    const String ssid = WiFi.SSID(i);
+    if (ssid.length() == 0) {
+      continue;
+    }
+
+    if (!first) {
+      json += ",";
+    }
+    json += "\"";
+    json += jsonEscape(ssid);
+    json += "\"";
+    first = false;
+  }
+
+  WiFi.scanDelete();
+  json += "]";
+  return json;
+}
+
 esp_err_t sendBadRequest(httpd_req_t *req, const char *message = "Bad Request") {
   setCorsHeaders(req);
   httpd_resp_set_status(req, "400 Bad Request");
@@ -777,20 +1208,111 @@ esp_err_t updatePageHandler(httpd_req_t *req) {
   return httpd_resp_send(req, UPDATE_PAGE, HTTPD_RESP_USE_STRLEN);
 }
 
+esp_err_t networkPageHandler(httpd_req_t *req) {
+  setCorsHeaders(req);
+  httpd_resp_set_type(req, "text/html; charset=utf-8");
+  return httpd_resp_send(req, NETWORK_PAGE, HTTPD_RESP_USE_STRLEN);
+}
+
 esp_err_t statusHandler(httpd_req_t *req) {
-  char response[160];
-  IPAddress ip = WiFi.softAPIP();
+  char response[320];
+  const IPAddress ip = getControlIpAddress();
+  const String network_name = getControlNetworkName();
+  const String host = isControlApMode() ? String("-") : String(getControlHostName()) + ".local";
+  const String current_mode = isControlApMode()
+    ? (getConfiguredNetworkMode() == "ap" ? "AP" : "AP fallback")
+    : "WiFi STA";
   snprintf(
     response,
     sizeof(response),
-    "{\"ssid\":\"%s\",\"ip\":\"%u.%u.%u.%u\",\"clients\":%d}",
-    WiFi.softAPSSID().c_str(),
+    "{\"ssid\":\"%s\",\"ip\":\"%u.%u.%u.%u\",\"host\":\"%s\",\"clients\":%d,\"mode\":\"%s\",\"configured_mode\":\"%s\",\"sta_ssid\":\"%s\",\"ap_ssid\":\"%s\"}",
+    jsonEscape(network_name).c_str(),
     ip[0], ip[1], ip[2], ip[3],
-    WiFi.softAPgetStationNum());
+    jsonEscape(host).c_str(),
+    getControlClientCount(),
+    jsonEscape(current_mode).c_str(),
+    jsonEscape(getConfiguredNetworkMode()).c_str(),
+    jsonEscape(getConfiguredStaSsid()).c_str(),
+    jsonEscape(getConfiguredApSsid()).c_str());
 
   setCorsHeaders(req);
   httpd_resp_set_type(req, "application/json");
   return httpd_resp_send(req, response, HTTPD_RESP_USE_STRLEN);
+}
+
+esp_err_t networkSettingsHandler(httpd_req_t *req) {
+  String body;
+  if (!readRequestBody(req, body, 1024)) {
+    return sendBadRequest(req, "Invalid network settings body");
+  }
+
+  char mode[16] = {0};
+  char sta_ssid[128] = {0};
+  char sta_password[128] = {0};
+  char ap_ssid[128] = {0};
+  char ap_password[128] = {0};
+
+  httpd_query_key_value(body.c_str(), "mode", mode, sizeof(mode));
+  httpd_query_key_value(body.c_str(), "sta_ssid", sta_ssid, sizeof(sta_ssid));
+  httpd_query_key_value(body.c_str(), "sta_password", sta_password, sizeof(sta_password));
+  httpd_query_key_value(body.c_str(), "ap_ssid", ap_ssid, sizeof(ap_ssid));
+  httpd_query_key_value(body.c_str(), "ap_password", ap_password, sizeof(ap_password));
+
+  String message;
+  const bool ok = saveControlNetworkSettings(
+    urlDecode(mode),
+    urlDecode(sta_ssid),
+    urlDecode(sta_password),
+    urlDecode(ap_ssid),
+    urlDecode(ap_password),
+    message);
+
+  const String response = String("{\"ok\":") + (ok ? "true" : "false") + ",\"message\":\"" + jsonEscape(message) + "\"}";
+  setCorsHeaders(req);
+  httpd_resp_set_type(req, "application/json");
+  if (!ok) {
+    httpd_resp_set_status(req, "400 Bad Request");
+    return httpd_resp_send(req, response.c_str(), HTTPD_RESP_USE_STRLEN);
+  }
+
+  httpd_resp_send(req, response.c_str(), HTTPD_RESP_USE_STRLEN);
+  delay(200);
+  ESP.restart();
+  return ESP_OK;
+}
+
+esp_err_t networkSettingsGetHandler(httpd_req_t *req) {
+  const IPAddress ip = getControlIpAddress();
+  const String host = isControlApMode() ? String("-") : String(getControlHostName()) + ".local";
+  const String current_mode = isControlApMode()
+    ? (getConfiguredNetworkMode() == "ap" ? "AP" : "AP fallback")
+    : "WiFi STA";
+  const String response =
+    String("{\"ssid\":\"") + jsonEscape(getControlNetworkName()) +
+    "\",\"ip\":\"" + ip.toString() +
+    "\",\"host\":\"" + jsonEscape(host) +
+    "\",\"clients\":" + String(getControlClientCount()) +
+    ",\"mode\":\"" + jsonEscape(current_mode) +
+    "\",\"configured_mode\":\"" + jsonEscape(getConfiguredNetworkMode()) +
+    "\",\"sta_ssid\":\"" + jsonEscape(getConfiguredStaSsid()) +
+    "\",\"sta_password\":\"" + jsonEscape(getConfiguredStaPassword()) +
+    "\",\"ap_ssid\":\"" + jsonEscape(getConfiguredApSsid()) +
+    "\",\"ap_password\":\"" + jsonEscape(getConfiguredApPassword()) +
+    "\",\"networks\":" + scanNetworksJsonArray() +
+    "}";
+
+  setCorsHeaders(req);
+  httpd_resp_set_type(req, "application/json");
+  return httpd_resp_send(req, response.c_str(), HTTPD_RESP_USE_STRLEN);
+}
+
+esp_err_t scanNetworksHandler(httpd_req_t *req) {
+  const String response =
+    String("{\"ok\":true,\"networks\":") + scanNetworksJsonArray() + "}";
+
+  setCorsHeaders(req);
+  httpd_resp_set_type(req, "application/json");
+  return httpd_resp_send(req, response.c_str(), HTTPD_RESP_USE_STRLEN);
 }
 
 esp_err_t unsupportedCameraHandler(httpd_req_t *req) {
@@ -833,28 +1355,9 @@ esp_err_t keypressHandler(httpd_req_t *req) {
 }
 
 esp_err_t jsonCommandHandler(httpd_req_t *req) {
-  if (req->content_len <= 0 || req->content_len > 1024) {
-    return sendBadRequest(req, "Invalid JSON body length");
-  }
-
   String body;
-  body.reserve(req->content_len);
-
-  int remaining = req->content_len;
-  while (remaining > 0) {
-    char chunk[128];
-    const int to_read = remaining > static_cast<int>(sizeof(chunk) - 1) ? sizeof(chunk) - 1 : remaining;
-    const int received = httpd_req_recv(req, chunk, to_read);
-    if (received <= 0) {
-      if (received == HTTPD_SOCK_ERR_TIMEOUT) {
-        httpd_resp_send_408(req);
-      }
-      return ESP_FAIL;
-    }
-
-    chunk[received] = '\0';
-    body += chunk;
-    remaining -= received;
+  if (!readRequestBody(req, body, 1024)) {
+    return sendBadRequest(req, "Invalid JSON body length");
   }
 
   Serial.println("Received JSON command:");
@@ -922,7 +1425,7 @@ esp_err_t updateUploadHandler(httpd_req_t *req) {
 
 void startControlServer() {
   httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-  config.max_uri_handlers = 8;
+  config.max_uri_handlers = 13;
 
   httpd_uri_t index_uri = {
     .uri = "/",
@@ -945,6 +1448,20 @@ void startControlServer() {
     .user_ctx = NULL
   };
 
+  httpd_uri_t network_page_uri = {
+    .uri = "/network-settings",
+    .method = HTTP_GET,
+    .handler = networkPageHandler,
+    .user_ctx = NULL
+  };
+
+  httpd_uri_t network_settings_get_uri = {
+    .uri = "/network",
+    .method = HTTP_GET,
+    .handler = networkSettingsGetHandler,
+    .user_ctx = NULL
+  };
+
   httpd_uri_t keypress_uri = {
     .uri = "/keypress",
     .method = HTTP_GET,
@@ -956,6 +1473,20 @@ void startControlServer() {
     .uri = "/json_command",
     .method = HTTP_POST,
     .handler = jsonCommandHandler,
+    .user_ctx = NULL
+  };
+
+  httpd_uri_t network_settings_uri = {
+    .uri = "/network",
+    .method = HTTP_POST,
+    .handler = networkSettingsHandler,
+    .user_ctx = NULL
+  };
+
+  httpd_uri_t scan_networks_uri = {
+    .uri = "/scan_networks",
+    .method = HTTP_GET,
+    .handler = scanNetworksHandler,
     .user_ctx = NULL
   };
 
@@ -991,13 +1522,17 @@ void startControlServer() {
     httpd_register_uri_handler(control_httpd, &index_uri);
     httpd_register_uri_handler(control_httpd, &status_uri);
     httpd_register_uri_handler(control_httpd, &update_page_uri);
+    httpd_register_uri_handler(control_httpd, &network_page_uri);
+    httpd_register_uri_handler(control_httpd, &network_settings_get_uri);
     httpd_register_uri_handler(control_httpd, &keypress_uri);
     httpd_register_uri_handler(control_httpd, &json_command_uri);
+    httpd_register_uri_handler(control_httpd, &network_settings_uri);
+    httpd_register_uri_handler(control_httpd, &scan_networks_uri);
     httpd_register_uri_handler(control_httpd, &update_upload_uri);
     httpd_register_uri_handler(control_httpd, &removed_camera_uri);
     httpd_register_uri_handler(control_httpd, &removed_stream_uri);
     httpd_register_uri_handler(control_httpd, &removed_control_uri);
-    Serial.printf("Control server ready at http://%s/\n", WiFi.softAPIP().toString().c_str());
+    Serial.printf("Control server ready at http://%s/\n", getControlIpAddress().toString().c_str());
   } else {
     Serial.println("Failed to start control HTTP server");
   }

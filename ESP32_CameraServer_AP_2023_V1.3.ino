@@ -97,8 +97,8 @@ void SocketServer_Test(void)
       if (millis() - Test_time > 1000) //定时检测连接设备
       {
         Test_time = millis();
-        //Serial2.println(WiFi.softAPgetStationNum());
-        if (0 == (WiFi.softAPgetStationNum())) //如果连接的设备个数为“0” 则向车模发送停止命令
+        // Serial2.println(getControlClientCount());
+        if (0 == getControlClientCount()) //如果连接的设备个数为“0” 则向车模发送停止命令
         {
           Serial2.print("{\"N\":100}");
           break;
@@ -145,7 +145,7 @@ void FactoryTest(void)
     }
   }
   {
-    if ((WiFi.softAPgetStationNum())) //连接的设备个数不为“0” led指示灯长亮
+    if (getControlClientCount()) //连接的设备个数不为“0” led指示灯长亮
     {
       if (true == WA_en)
       {
@@ -184,9 +184,9 @@ void FactoryTest(void)
 void setup()
 {
   Serial.begin(115200);
-  Serial.print("wifi_name:");
+  Serial.print("network_id:");
   Serial2.begin(9600, SERIAL_8N1, RXD2, TXD2);
-  // Control UI: http://192.168.4.1/
+  // Control UI: http://robotcar.local/ or AP fallback IP.
   CameraWebServerAP.CameraWebServer_AP_Init();
   server.begin();
   delay(100);
