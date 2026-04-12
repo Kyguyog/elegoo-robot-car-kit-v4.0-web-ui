@@ -291,6 +291,7 @@ const char CONTROL_PAGE[] PROGMEM = R"HTML(
     let lastDpadAdjustTime = 0;
 
     function buildDriveCommand(forward, reverse, left, right, speed) {
+
       if (forward) {
         if (left && !right) {
           return { N: 102, D1: 5, D2: speed };
@@ -390,6 +391,30 @@ const char CONTROL_PAGE[] PROGMEM = R"HTML(
       updateSpeedDisplay();
     }
 
+    function vibrateController(gamepad) {
+      if (!gamepad) {
+        return;
+      }
+
+      if (gamepad.vibrationActuator && gamepad.vibrationActuator.playEffect) {
+        gamepad.vibrationActuator.playEffect('dual-rumble', {
+          startDelay: 0,
+          duration: 140,
+          weakMagnitude: 0.65,
+          strongMagnitude: 1.0
+        }).catch(() => {});
+        return;
+      }
+
+      if (gamepad.hapticActuators && gamepad.hapticActuators.length > 0) {
+        gamepad.hapticActuators.forEach((actuator) => {
+          if (actuator && actuator.pulse) {
+            actuator.pulse(0.9, 140).catch(() => {});
+          }
+        });
+      }
+    }
+
     function buildGamepadCommand(gamepad) {
       const leftX = gamepad.axes[0] || 0;
       const leftTrigger = gamepad.buttons[6] ? gamepad.buttons[6].value : 0;
@@ -428,10 +453,18 @@ const char CONTROL_PAGE[] PROGMEM = R"HTML(
       if (gamepad) {
         const now = Date.now();
         if (gamepad.buttons[12] && gamepad.buttons[12].pressed && now - lastDpadAdjustTime > 180) {
-          setSpeedValue(Number(speedEl.value) + 10);
+          const nextSpeed = clampSpeed(Number(speedEl.value) + 10);
+          setSpeedValue(nextSpeed);
+          if (nextSpeed === 255) {
+            vibrateController(gamepad);
+          }
           lastDpadAdjustTime = now;
         } else if (gamepad.buttons[13] && gamepad.buttons[13].pressed && now - lastDpadAdjustTime > 180) {
-          setSpeedValue(Number(speedEl.value) - 10);
+          const nextSpeed = clampSpeed(Number(speedEl.value) - 10);
+          setSpeedValue(nextSpeed);
+          if (nextSpeed === 0) {
+            vibrateController(gamepad);
+          }
           lastDpadAdjustTime = now;
         }
 
