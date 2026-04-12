@@ -4,8 +4,6 @@
 #include "esp_http_server.h"
 #include "CameraWebServer_AP.h"
 
-extern void notifyDriveCommandForwarded(const String &payload);
-
 namespace {
 
 httpd_handle_t control_httpd = NULL;
@@ -107,6 +105,13 @@ const char CONTROL_PAGE[] PROGMEM = R"HTML(
       word-break: break-word;
     }
 
+    .pad {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      margin-top: 14px;
+    }
+
     button, input, textarea {
       font: inherit;
     }
@@ -133,83 +138,6 @@ const char CONTROL_PAGE[] PROGMEM = R"HTML(
     .danger { background: linear-gradient(180deg, #ff7290, var(--danger)); }
 
     .wide { grid-column: span 3; }
-
-    .drive-surface {
-      display: grid;
-      gap: 16px;
-      justify-items: center;
-      margin-top: 14px;
-    }
-
-    .joystick-shell {
-      width: min(100%, 320px);
-    }
-
-    .joystick-zone {
-      position: relative;
-      width: min(100%, 320px);
-      aspect-ratio: 1;
-      margin: 0 auto;
-      border-radius: 50%;
-      background:
-        radial-gradient(circle at 50% 50%, rgba(46, 196, 182, 0.2), rgba(46, 196, 182, 0.05) 38%, transparent 39%),
-        radial-gradient(circle at 50% 50%, rgba(255, 107, 53, 0.18), transparent 64%),
-        linear-gradient(180deg, #223142, #17212b);
-      border: 1px solid rgba(255, 255, 255, 0.08);
-      box-shadow: inset 0 10px 24px rgba(0, 0, 0, 0.25);
-      touch-action: none;
-      user-select: none;
-      overflow: hidden;
-    }
-
-    .joystick-zone::before,
-    .joystick-zone::after {
-      content: "";
-      position: absolute;
-      inset: 50%;
-      background: rgba(255, 255, 255, 0.08);
-      transform: translate(-50%, -50%);
-    }
-
-    .joystick-zone::before {
-      width: 74%;
-      height: 1px;
-    }
-
-    .joystick-zone::after {
-      width: 1px;
-      height: 74%;
-    }
-
-    .joystick-handle {
-      position: absolute;
-      left: 50%;
-      top: 50%;
-      width: 34%;
-      aspect-ratio: 1;
-      border-radius: 50%;
-      transform: translate(-50%, -50%);
-      background: linear-gradient(180deg, #48dacd, var(--accent-2));
-      box-shadow:
-        0 16px 28px rgba(0, 0, 0, 0.32),
-        inset 0 2px 10px rgba(255, 255, 255, 0.18);
-      border: 2px solid rgba(255, 255, 255, 0.18);
-      transition: transform 0.08s ease;
-    }
-
-    .joystick-handle.active {
-      background: linear-gradient(180deg, #ff874f, var(--accent));
-    }
-
-    .joystick-readout {
-      margin-top: 12px;
-      text-align: center;
-    }
-
-    .stop-button {
-      width: min(100%, 320px);
-      min-height: 56px;
-    }
 
     .row {
       display: flex;
@@ -298,7 +226,6 @@ const char CONTROL_PAGE[] PROGMEM = R"HTML(
       h1 { font-size: 26px; }
       .stats { grid-template-columns: 1fr; }
       .key { min-height: 58px; font-size: 18px; }
-      .joystick-shell, .joystick-zone, .stop-button { width: 100%; }
     }
   </style>
 </head>
@@ -316,16 +243,18 @@ const char CONTROL_PAGE[] PROGMEM = R"HTML(
     <div class="grid">
       <section class="panel">
         <div class="label">Drive Pad</div>
-        <div class="drive-surface">
-          <div class="joystick-shell">
-            <div class="joystick-zone" id="joystickZone" aria-label="Drive joystick" role="application">
-              <div class="joystick-handle" id="joystickHandle"></div>
-            </div>
-            <div class="joystick-readout value">Direction: <span id="joystickValue">Idle</span></div>
-          </div>
-          <button class="key danger stop-button" id="stopButton" type="button">STOP</button>
+        <div class="pad">
+          <div></div>
+          <button class="key accent" data-key="w">W</button>
+          <div></div>
+          <button class="key teal" data-key="a">A</button>
+          <button class="key danger" data-key="x">STOP</button>
+          <button class="key teal" data-key="d">D</button>
+          <div></div>
+          <button class="key accent" data-key="s">S</button>
+          <div></div>
         </div>
-        <div class="hint">Drag the joystick to steer. Keyboard still supports <code>W A S D</code>, arrow keys, and <code>X</code> for stop. Controller support is unchanged.</div>
+        <div class="hint">Keyboard: <code>W A S D</code>, arrow keys, and <code>X</code> for stop. Controller: left stick turns, triggers drive, D-pad up/down changes speed, shoulders stop.</div>
         <div class="row">
           <input id="speed" type="range" min="0" max="255" value="180">
           <div class="value">Speed: <span id="speedValue">180</span></div>
@@ -339,28 +268,31 @@ const char CONTROL_PAGE[] PROGMEM = R"HTML(
     const logEl = document.getElementById('log');
     const speedEl = document.getElementById('speed');
     const speedValueEl = document.getElementById('speedValue');
-    const joystickZoneEl = document.getElementById('joystickZone');
-    const joystickHandleEl = document.getElementById('joystickHandle');
-    const joystickValueEl = document.getElementById('joystickValue');
-    const stopButtonEl = document.getElementById('stopButton');
 
     function setLog(message, isError = false) {
       logEl.textContent = message;
       logEl.style.color = isError ? '#ff8da1' : '#2ec4b6';
     }
 
-    async function sendJson(payload, keepalive = false) {
+    async function sendJson(payload) {
       const response = await fetch('/json_command', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: payload,
-        keepalive
+        body: payload
       });
       if (!response.ok) {
         throw new Error(`JSON send failed: ${response.status}`);
       }
       const text = await response.text();
       setLog(text || 'JSON command sent');
+    }
+
+    function pressButton(button) {
+      button.classList.add('active');
+    }
+
+    function releaseButton(button) {
+      button.classList.remove('active');
     }
 
     const keyboardState = {
@@ -370,25 +302,10 @@ const char CONTROL_PAGE[] PROGMEM = R"HTML(
       d: false
     };
 
-    const joystickState = {
-      forward: false,
-      reverse: false,
-      left: false,
-      right: false
-    };
-
     let lastDrivePayload = '';
     let gamepadActive = false;
     let lastGamepadSignature = '';
     let lastDpadAdjustTime = 0;
-    let lastGamepadCommand = null;
-    let joystickActive = false;
-    let joystickPointerId = null;
-    let joystickVector = { x: 0, y: 0 };
-
-    function buildStopCommand() {
-      return { H: 1, N: 1, D1: 0, D2: 0, D3: 1 };
-    }
 
     function buildDriveCommand(forward, reverse, left, right, speed) {
 
@@ -420,7 +337,7 @@ const char CONTROL_PAGE[] PROGMEM = R"HTML(
         return { N: 102, D1: 4, D2: speed };
       }
 
-      return buildStopCommand();
+      return { H: 1, N: 1, D1: 0, D2: 0, D3: 1 };
     }
 
     function buildKeyboardDriveCommand() {
@@ -433,29 +350,9 @@ const char CONTROL_PAGE[] PROGMEM = R"HTML(
       );
     }
 
-    function buildJoystickDriveCommand() {
-      return buildDriveCommand(
-        joystickState.forward,
-        joystickState.reverse,
-        joystickState.left,
-        joystickState.right,
-        Number(speedEl.value)
-      );
-    }
-
-    function buildCurrentDriveCommand() {
-      if (gamepadActive && lastGamepadCommand) {
-        return lastGamepadCommand;
-      }
-      if (joystickActive) {
-        return buildJoystickDriveCommand();
-      }
-      return buildKeyboardDriveCommand();
-    }
-
-    async function syncDriveCommand(commandObject = null, force = false) {
-      const payload = JSON.stringify(commandObject || buildCurrentDriveCommand());
-      if (!force && payload === lastDrivePayload) {
+    async function syncDriveCommand(commandObject = null) {
+      const payload = JSON.stringify(commandObject || buildKeyboardDriveCommand());
+      if (payload === lastDrivePayload) {
         return;
       }
       lastDrivePayload = payload;
@@ -506,81 +403,6 @@ const char CONTROL_PAGE[] PROGMEM = R"HTML(
       speedValueEl.textContent = speedEl.value;
     }
 
-    function setJoystickVisual(x, y, active) {
-      joystickVector = { x, y };
-      joystickHandleEl.style.transform = `translate(calc(-50% + ${x}px), calc(-50% + ${y}px))`;
-      joystickHandleEl.classList.toggle('active', active);
-    }
-
-    function describeJoystickDirection() {
-      if (!joystickActive) {
-        joystickValueEl.textContent = 'Idle';
-        return;
-      }
-
-      const parts = [];
-      if (joystickState.forward) parts.push('Forward');
-      if (joystickState.reverse) parts.push('Reverse');
-      if (joystickState.left) parts.push('Left');
-      if (joystickState.right) parts.push('Right');
-      joystickValueEl.textContent = parts.length ? parts.join(' + ') : 'Center';
-    }
-
-    async function syncJoystickDrive(force = false) {
-      if (gamepadActive) {
-        return;
-      }
-      await syncDriveCommand(buildJoystickDriveCommand(), force);
-    }
-
-    function updateJoystickStateFromVector(x, y) {
-      const threshold = 18;
-      joystickState.left = x < -threshold;
-      joystickState.right = x > threshold;
-      joystickState.forward = y < -threshold;
-      joystickState.reverse = y > threshold;
-      describeJoystickDirection();
-    }
-
-    function resetJoystickState() {
-      joystickActive = false;
-      joystickPointerId = null;
-      joystickState.forward = false;
-      joystickState.reverse = false;
-      joystickState.left = false;
-      joystickState.right = false;
-      setJoystickVisual(0, 0, false);
-      describeJoystickDirection();
-    }
-
-    async function releaseJoystick() {
-      if (!joystickActive) {
-        return;
-      }
-      resetJoystickState();
-      if (!gamepadActive) {
-        await syncDriveCommand();
-      }
-    }
-
-    async function updateJoystickFromPointer(clientX, clientY) {
-      const rect = joystickZoneEl.getBoundingClientRect();
-      const centerX = rect.left + rect.width / 2;
-      const centerY = rect.top + rect.height / 2;
-      const maxRadius = rect.width * 0.34;
-      const rawX = clientX - centerX;
-      const rawY = clientY - centerY;
-      const distance = Math.hypot(rawX, rawY);
-      const scale = distance > maxRadius ? maxRadius / distance : 1;
-      const x = rawX * scale;
-      const y = rawY * scale;
-
-      joystickActive = true;
-      setJoystickVisual(x, y, true);
-      updateJoystickStateFromVector(x, y);
-      await syncJoystickDrive();
-    }
-
     function setSpeedValue(nextSpeed) {
       speedEl.value = String(clampSpeed(nextSpeed));
       updateSpeedDisplay();
@@ -619,7 +441,7 @@ const char CONTROL_PAGE[] PROGMEM = R"HTML(
       if (shoulderStop) {
         return {
           active: true,
-          command: buildStopCommand(),
+          command: { H: 1, N: 1, D1: 0, D2: 0, D3: 1 },
           signature: 'stop'
         };
       }
@@ -667,7 +489,6 @@ const char CONTROL_PAGE[] PROGMEM = R"HTML(
 
         if (state.active) {
           gamepadActive = true;
-          lastGamepadCommand = state.command;
           if (state.signature !== lastGamepadSignature || JSON.stringify(state.command) !== lastDrivePayload) {
             lastGamepadSignature = state.signature;
             syncDriveCommand(state.command).catch((error) => setLog(error.message, true));
@@ -675,69 +496,62 @@ const char CONTROL_PAGE[] PROGMEM = R"HTML(
         } else if (gamepadActive) {
           gamepadActive = false;
           lastGamepadSignature = '';
-          lastGamepadCommand = null;
           syncDriveCommand().catch((error) => setLog(error.message, true));
         }
       } else if (gamepadActive) {
         gamepadActive = false;
         lastGamepadSignature = '';
-        lastGamepadCommand = null;
         syncDriveCommand().catch((error) => setLog(error.message, true));
       }
 
       window.requestAnimationFrame(pollGamepad);
     }
 
-    joystickZoneEl.addEventListener('pointerdown', async (event) => {
-      event.preventDefault();
-      joystickPointerId = event.pointerId;
-      joystickZoneEl.setPointerCapture(event.pointerId);
-      try {
-        await updateJoystickFromPointer(event.clientX, event.clientY);
-      } catch (error) {
-        setLog(error.message, true);
-      }
-    });
+    document.querySelectorAll('[data-key]').forEach((button) => {
+      const key = button.dataset.key;
+      button.addEventListener('mousedown', async () => {
+        pressButton(button);
+        try {
+          if (['w', 'a', 's', 'd'].includes(key)) {
+            await handleDriveKeyDown(key);
+          } else if (key === 'x') {
+            await sendImmediateCommand({ H: 1, N: 1, D1: 0, D2: 0, D3: 1 }, `Sent ${key.toUpperCase()} stop`);
+          }
+        } catch (error) {
+          setLog(error.message, true);
+        }
+      });
+      button.addEventListener('touchstart', async (event) => {
+        event.preventDefault();
+        pressButton(button);
+        try {
+          if (['w', 'a', 's', 'd'].includes(key)) {
+            await handleDriveKeyDown(key);
+          } else if (key === 'x') {
+            await sendImmediateCommand({ H: 1, N: 1, D1: 0, D2: 0, D3: 1 }, `Sent ${key.toUpperCase()} stop`);
+          }
+        } catch (error) {
+          setLog(error.message, true);
+        }
+      }, { passive: false });
 
-    joystickZoneEl.addEventListener('pointermove', async (event) => {
-      if (event.pointerId !== joystickPointerId) {
-        return;
-      }
-      try {
-        await updateJoystickFromPointer(event.clientX, event.clientY);
-      } catch (error) {
-        setLog(error.message, true);
-      }
-    });
+      const release = async (event) => {
+        if (event) {
+          event.preventDefault();
+        }
+        releaseButton(button);
+        try {
+          if (['w', 'a', 's', 'd'].includes(key)) {
+            await handleDriveKeyUp(key);
+          }
+        } catch (error) {
+          setLog(error.message, true);
+        }
+      };
 
-    const endJoystickPointer = async (event) => {
-      if (event.pointerId !== joystickPointerId) {
-        return;
-      }
-      try {
-        await releaseJoystick();
-      } catch (error) {
-        setLog(error.message, true);
-      }
-    };
-
-    joystickZoneEl.addEventListener('pointerup', endJoystickPointer);
-    joystickZoneEl.addEventListener('pointercancel', endJoystickPointer);
-    joystickZoneEl.addEventListener('lostpointercapture', async () => {
-      try {
-        await releaseJoystick();
-      } catch (error) {
-        setLog(error.message, true);
-      }
-    });
-
-    stopButtonEl.addEventListener('click', async () => {
-      try {
-        resetJoystickState();
-        await sendImmediateCommand(buildStopCommand(), 'Sent STOP');
-      } catch (error) {
-        setLog(error.message, true);
-      }
+      button.addEventListener('mouseup', release);
+      button.addEventListener('mouseleave', release);
+      button.addEventListener('touchend', release, { passive: false });
     });
 
     document.addEventListener('keydown', async (event) => {
@@ -755,7 +569,7 @@ const char CONTROL_PAGE[] PROGMEM = R"HTML(
         if (['w', 'a', 's', 'd'].includes(key)) {
           await handleDriveKeyDown(key);
         } else if (key === 'x') {
-          await sendImmediateCommand(buildStopCommand(), `Sent ${key.toUpperCase()} stop`);
+          await sendImmediateCommand({ H: 1, N: 1, D1: 0, D2: 0, D3: 1 }, `Sent ${key.toUpperCase()} stop`);
         }
       } catch (error) {
         setLog(error.message, true);
@@ -777,7 +591,7 @@ const char CONTROL_PAGE[] PROGMEM = R"HTML(
 
     speedEl.addEventListener('input', () => {
       updateSpeedDisplay();
-      if (!gamepadActive && (keyboardState.w || keyboardState.a || keyboardState.s || keyboardState.d || joystickActive)) {
+      if (!gamepadActive && (keyboardState.w || keyboardState.a || keyboardState.s || keyboardState.d)) {
         syncDriveCommand().catch((error) => setLog(error.message, true));
       }
     });
@@ -789,52 +603,10 @@ const char CONTROL_PAGE[] PROGMEM = R"HTML(
     window.addEventListener('gamepaddisconnected', () => {
       gamepadActive = false;
       lastGamepadSignature = '';
-      lastGamepadCommand = null;
       setLog('Controller disconnected', true);
     });
 
-    function keyboardDriveActive() {
-      return keyboardState.w || keyboardState.a || keyboardState.s || keyboardState.d;
-    }
-
-    function sendStopKeepalive() {
-      const payload = JSON.stringify(buildStopCommand());
-      lastDrivePayload = payload;
-      fetch('/json_command', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: payload,
-        keepalive: true
-      }).catch(() => {});
-    }
-
-    window.setInterval(() => {
-      if (gamepadActive && lastGamepadCommand) {
-        syncDriveCommand(lastGamepadCommand, true).catch((error) => setLog(error.message, true));
-        return;
-      }
-
-      if (joystickActive) {
-        syncDriveCommand(buildJoystickDriveCommand(), true).catch((error) => setLog(error.message, true));
-        return;
-      }
-
-      if (keyboardDriveActive()) {
-        syncDriveCommand(buildKeyboardDriveCommand(), true).catch((error) => setLog(error.message, true));
-      }
-    }, 180);
-
-    window.addEventListener('pagehide', sendStopKeepalive);
-    window.addEventListener('beforeunload', sendStopKeepalive);
-    window.addEventListener('blur', sendStopKeepalive);
-    document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'hidden') {
-        sendStopKeepalive();
-      }
-    });
-
     updateSpeedDisplay();
-    describeJoystickDirection();
     window.requestAnimationFrame(pollGamepad);
   </script>
 </body>
@@ -1592,7 +1364,6 @@ esp_err_t jsonCommandHandler(httpd_req_t *req) {
   Serial.println(body);
   Serial2.print(body);
   Serial2.print("\n");
-  notifyDriveCommandForwarded(body);
 
   setCorsHeaders(req);
   httpd_resp_set_type(req, "text/plain; charset=utf-8");

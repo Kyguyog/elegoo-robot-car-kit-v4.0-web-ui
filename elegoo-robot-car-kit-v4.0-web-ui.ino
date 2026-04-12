@@ -1,177 +1,226 @@
 /*
- * ESP32-S3 control bridge for the Elegoo robot car.
- * Hosts the web UI, forwards drive commands to the UNO, and enforces a
- * failsafe so the car stops if command refreshes stop arriving.
+ * @Descripttion: 
+ * @version: 
+ * @Author: Elegoo
+ * @Date: 2023-10-11
+ * @LastEditors: Changhua
+ * @LastEditTime: 2023-10-23
  */
-
+//#include <EEPROM.h>
 #include "CameraWebServer_AP.h"
 #include <WiFi.h>
-#include <ctype.h>
-#include "esp_system.h"
+WiFiServer server(100);
 
 #define RXD2 3
 #define TXD2 40
-#define STATUS_LED_PIN 46
+CameraWebServer_AP CameraWebServerAP;
 
-namespace {
+bool WA_en = false;
 
-constexpr unsigned long DRIVE_COMMAND_TIMEOUT_MS = 700;
-constexpr char UNO_WIFI_TOGGLE_MESSAGE[] = "{WIFI_TOGGLE}";
-constexpr char UNO_STOP_COMMAND[] = "{\"N\":100}\n";
-
-CameraWebServer_AP g_cameraWebServerAp;
-String g_serial2Buffer;
-unsigned long g_lastDriveCommandMs = 0;
-bool g_driveCommandActive = false;
-bool g_restartRequested = false;
-unsigned long g_restartAtMs = 0;
-
-bool payloadContainsIntField(const String &payload, const char *fieldName, int expectedValue) {
-  const String quotedField = String("\"") + fieldName + "\"";
-  int fieldIndex = payload.indexOf(quotedField);
-  if (fieldIndex < 0) {
-    return false;
-  }
-
-  int colonIndex = payload.indexOf(':', fieldIndex + quotedField.length());
-  if (colonIndex < 0) {
-    return false;
-  }
-
-  int valueStart = colonIndex + 1;
-  while (valueStart < payload.length() && isspace(static_cast<unsigned char>(payload[valueStart]))) {
-    valueStart++;
-  }
-
-  int valueEnd = valueStart;
-  if (valueEnd < payload.length() && (payload[valueEnd] == '-' || payload[valueEnd] == '+')) {
-    valueEnd++;
-  }
-  while (valueEnd < payload.length() && isdigit(static_cast<unsigned char>(payload[valueEnd]))) {
-    valueEnd++;
-  }
-
-  if (valueEnd == valueStart) {
-    return false;
-  }
-
-  return payload.substring(valueStart, valueEnd).toInt() == expectedValue;
-}
-
-bool isDriveStartPayload(const String &payload) {
-  return payloadContainsIntField(payload, "N", 102);
-}
-
-bool isDriveStopPayload(const String &payload) {
-  return payloadContainsIntField(payload, "N", 100) ||
-         payloadContainsIntField(payload, "N", 110) ||
-         payloadContainsIntField(payload, "N", 1);
-}
-
-void forwardStopToUno(const char *reason) {
-  Serial.printf("Forwarding stop to UNO (%s)\n", reason);
-  Serial2.print(UNO_STOP_COMMAND);
-}
-
-void scheduleRestart(unsigned long delayMs) {
-  g_restartRequested = true;
-  g_restartAtMs = millis() + delayMs;
-}
-
-void handleUnoMessage(const String &message) {
-  if (message.length() == 0) {
-    return;
-  }
-
-  Serial.print("UNO -> ESP32: ");
-  Serial.println(message);
-
-  if (message == UNO_WIFI_TOGGLE_MESSAGE) {
-    String statusMessage;
-    if (toggleConfiguredNetworkMode(statusMessage)) {
-      Serial.println(statusMessage);
-      forwardStopToUno("network mode toggle");
-      g_driveCommandActive = false;
-      scheduleRestart(300);
-    } else {
-      Serial.print("Wi-Fi mode toggle failed: ");
-      Serial.println(statusMessage);
-    }
-  }
-}
-
-void processUnoSerial() {
-  while (Serial2.available()) {
-    const char c = static_cast<char>(Serial2.read());
-
-    if (c == '\r' || c == '\n') {
-      if (g_serial2Buffer.length() > 0) {
-        handleUnoMessage(g_serial2Buffer);
-        g_serial2Buffer = "";
+void SocketServer_Test(void)
+{
+  static bool ED_client = true;
+  WiFiClient client = server.available(); //尝试建立客户对象
+  if (client)                             //如果当前客户可用
+  {
+    WA_en = true;
+    ED_client = true;
+    Serial.println("[Client connected]");
+    String readBuff;
+    String sendBuff;
+    uint8_t Heartbeat_count = 0;
+    bool Heartbeat_status = false;
+    bool data_begin = true;
+    while (client.connected()) //如果客户端处于连接状态
+    {
+      if (client.available()) //如果有可读数据
+      {
+        char c = client.read();             //读取一个字节
+        Serial.print(c);                    //从串口打印
+        if (true == data_begin && c == '{') //接收到开始字符
+        {
+          data_begin = false;
+        }
+        if (false == data_begin && c != ' ') //去掉空格
+        {
+          readBuff += c;
+        }
+        if (false == data_begin && c == '}') //接收到结束字符
+        {
+          data_begin = true;
+          if (true == readBuff.equals("{Heartbeat}"))
+          {
+            Heartbeat_status = true;
+          }
+          else
+          {
+            Serial2.print(readBuff);
+          }
+          //Serial2.print(readBuff);
+          readBuff = "";
+        }
       }
-      continue;
+      if (Serial2.available())
+      {
+        char c = Serial2.read();
+        sendBuff += c;
+        if (c == '}') //接收到结束字符
+        {
+          client.print(sendBuff);
+          Serial.print(sendBuff); //从串口打印
+          sendBuff = "";
+        }
+      }
+
+      static unsigned long Heartbeat_time = 0;
+      if (millis() - Heartbeat_time > 1000) //心跳频率
+      {
+        client.print("{Heartbeat}");
+        if (true == Heartbeat_status)
+        {
+          Heartbeat_status = false;
+          Heartbeat_count = 0;
+        }
+        else if (false == Heartbeat_status)
+        {
+          Heartbeat_count += 1;
+        }
+        if (Heartbeat_count > 3)
+        {
+          Heartbeat_count = 0;
+          Heartbeat_status = false;
+          break;
+        }
+        Heartbeat_time = millis();
+      }
+      static unsigned long Test_time = 0;
+      if (millis() - Test_time > 1000) //定时检测连接设备
+      {
+        Test_time = millis();
+        // Serial2.println(getControlClientCount());
+        if (0 == getControlClientCount()) //如果连接的设备个数为“0” 则向车模发送停止命令
+        {
+          Serial2.print("{\"N\":100}");
+          break;
+        }
+      }
     }
-
-    g_serial2Buffer += c;
-    if (c == '}') {
-      handleUnoMessage(g_serial2Buffer);
-      g_serial2Buffer = "";
+    Serial2.print("{\"N\":100}");
+    client.stop(); //结束当前连接:
+    Serial.println("[Client disconnected]");
+  }
+  else
+  {
+    if (ED_client == true)
+    {
+      ED_client = false;
+      Serial2.print("{\"N\":100}");
     }
-
-    if (g_serial2Buffer.length() > 160) {
-      g_serial2Buffer = "";
+  }
+}
+/*作用于测试架*/
+void FactoryTest(void)
+{
+  static String readBuff;
+  String sendBuff;
+  if (Serial2.available())
+  {
+    char c = Serial2.read();
+    readBuff += c;
+    if (c == '}') //接收到结束字符
+    {
+      if (true == readBuff.equals("{BT_detection}"))
+      {
+        Serial2.print("{BT_OK}");
+        Serial.println("Factory...");
+      }
+      else if (true == readBuff.equals("{WA_detection}"))
+      {
+        Serial2.print("{");
+        Serial2.print(CameraWebServerAP.wifi_name);
+        Serial2.print("}");
+        Serial.println("Factory...");
+      }
+      readBuff = "";
+    }
+  }
+  {
+    if (getControlClientCount()) //连接的设备个数不为“0” led指示灯长亮
+    {
+      if (true == WA_en)
+      {
+        digitalWrite(46, LOW);
+        Serial2.print("{WA_OK}");
+        WA_en = false;
+      }
+    }
+    else
+    {
+      //获取时间戳 timestamp
+      static unsigned long Test_time;
+      static bool en = true;
+      if (millis() - Test_time > 100)
+      {
+        if (false == WA_en)
+        {
+          Serial2.print("{WA_NO}");
+          WA_en = true;
+        }
+        if (en == true)
+        {
+          en = false;
+          digitalWrite(46, HIGH);
+        }
+        else
+        {
+          en = true;
+          digitalWrite(46, LOW);
+        }
+        Test_time = millis();
+      }
     }
   }
 }
-
-void enforceDriveFailsafe() {
-  if (!g_driveCommandActive) {
-    return;
-  }
-
-  if (millis() - g_lastDriveCommandMs > DRIVE_COMMAND_TIMEOUT_MS) {
-    g_driveCommandActive = false;
-    forwardStopToUno("drive lease expired");
-  }
-}
-
-void servicePendingRestart() {
-  if (g_restartRequested && static_cast<long>(millis() - g_restartAtMs) >= 0) {
-    Serial.println("Rebooting to apply Wi-Fi mode change");
-    delay(50);
-    ESP.restart();
-  }
-}
-
-}  // namespace
-
-void notifyDriveCommandForwarded(const String &payload) {
-  if (isDriveStartPayload(payload)) {
-    g_driveCommandActive = true;
-    g_lastDriveCommandMs = millis();
-    return;
-  }
-
-  if (isDriveStopPayload(payload)) {
-    g_driveCommandActive = false;
-  }
-}
-
-void setup() {
+void setup()
+{
   Serial.begin(115200);
-  Serial2.begin(9600, SERIAL_8N1, RXD2, TXD2);
-
-  pinMode(STATUS_LED_PIN, OUTPUT);
-  digitalWrite(STATUS_LED_PIN, HIGH);
-
   Serial.print("network_id:");
-  g_cameraWebServerAp.CameraWebServer_AP_Init();
-  forwardStopToUno("startup");
-  Serial.println("Control bridge ready");
+  Serial2.begin(9600, SERIAL_8N1, RXD2, TXD2);
+  // Control UI: http://robotcar.local/ or AP fallback IP.
+  CameraWebServerAP.CameraWebServer_AP_Init();
+  server.begin();
+  delay(100);
+  // while (Serial.read() >= 0)
+  // {
+  //   /*清空串口缓存...*/
+  // }
+  // while (Serial2.read() >= 0)
+  // {
+  //   /*清空串口缓存...*/
+  // }
+  pinMode(46, OUTPUT);
+  digitalWrite(46, HIGH);
+  Serial.println("Elegoo-2020...");
+  Serial2.print("{Factory}");
+  //ESP.restart();
+  // esp_restart();
+}
+void loop()
+{
+  SocketServer_Test();
+  FactoryTest();
 }
 
-void loop() {
-  processUnoSerial();
-  enforceDriveFailsafe();
-  servicePendingRestart();
-}
+/*
+C:\Program Files (x86)\Arduino\hardware\espressif\arduino-esp32/tools/esptool/esptool.exe --chip esp32 --port COM6 --baud 460800 --before default_reset --after hard_reset write_flash -z --flash_mode dio --flash_freq 80m --flash_size detect 
+0xe000 C:\Program Files (x86)\Arduino\hardware\espressif\arduino-esp32/tools/partitions/boot_app0.bin 
+0x1000 C:\Program Files (x86)\Arduino\hardware\espressif\arduino-esp32/tools/sdk/bin/bootloader_qio_80m.bin 
+0x10000 C:\Users\Faynman\Documents\Arduino\Hex/CameraWebServer_AP_20200608xxx.ino.bin 
+0x8000 C:\Users\Faynman\Documents\Arduino\Hex/CameraWebServer_AP_20200608xxx.ino.partitions.bin 
+
+flash:path
+C:\Program Files (x86)\Arduino\hardware\espressif\arduino-esp32\tools\partitions\boot_app0.bin
+C:\Program Files (x86)\Arduino\hardware\espressif\arduino-esp32\tools\sdk\bin\bootloader_dio_40m.bin
+C:\Users\Faynman\Documents\Arduino\Hex\CameraWebServer_AP_20200608xxx.ino.partitions.bin
+*/
+//esptool.py-- port / dev / ttyUSB0-- baub 261216 write_flash-- flash_size = detect 0 GetChipID.ino.esp32.bin
