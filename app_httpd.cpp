@@ -1,5 +1,6 @@
 #include <WiFi.h>
 #include "Arduino.h"
+#include <Update.h>
 #include "esp_http_server.h"
 
 namespace {
@@ -145,6 +146,19 @@ const char CONTROL_PAGE[] PROGMEM = R"HTML(
       margin-top: 14px;
     }
 
+    .nav-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 44px;
+      padding: 0 16px;
+      border-radius: 12px;
+      background: linear-gradient(180deg, #ff874f, var(--accent));
+      color: #fff;
+      text-decoration: none;
+      font-weight: 700;
+    }
+
     input[type="range"] {
       width: 100%;
     }
@@ -195,6 +209,9 @@ const char CONTROL_PAGE[] PROGMEM = R"HTML(
   <div class="wrap">
     <section class="hero">
       <h1>UMRT Robot Control</h1>
+      <div class="row">
+        <a class="nav-button" href="/update">Open OTA Update</a>
+      </div>
       <div class="stats">
         <div class="stat">
           <div class="label">SSID</div>
@@ -598,6 +615,144 @@ const char CONTROL_PAGE[] PROGMEM = R"HTML(
 </html>
 )HTML";
 
+const char UPDATE_PAGE[] PROGMEM = R"HTML(
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>UMRT OTA Update</title>
+  <style>
+    :root {
+      --bg: #101820;
+      --panel: #17212b;
+      --accent: #ff6b35;
+      --text: #f4f7fb;
+      --muted: #9db0c2;
+      --ok: #2ec4b6;
+      --bad: #ff6b6b;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: Arial, Helvetica, sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at top, rgba(46, 196, 182, 0.12), transparent 30%),
+        linear-gradient(180deg, #0b1218, var(--bg));
+      display: grid;
+      place-items: center;
+      padding: 16px;
+    }
+    .panel {
+      width: min(560px, 100%);
+      background: rgba(23, 33, 43, 0.94);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 18px;
+      padding: 22px;
+      box-shadow: 0 20px 50px rgba(0,0,0,0.25);
+    }
+    h1 { margin: 0 0 10px; font-size: 30px; }
+    p { margin: 0 0 16px; color: var(--muted); line-height: 1.5; }
+    input[type="file"] {
+      width: 100%;
+      margin: 8px 0 16px;
+      color: var(--text);
+    }
+    button {
+      width: 100%;
+      min-height: 52px;
+      border: 0;
+      border-radius: 14px;
+      font: inherit;
+      font-weight: 700;
+      color: #fff;
+      background: linear-gradient(180deg, #ff874f, var(--accent));
+      cursor: pointer;
+    }
+    progress {
+      width: 100%;
+      height: 16px;
+      margin-top: 16px;
+    }
+    .status {
+      margin-top: 12px;
+      min-height: 22px;
+      color: var(--muted);
+    }
+    .ok { color: var(--ok); }
+    .bad { color: var(--bad); }
+    a { color: #8fd8ff; }
+  </style>
+</head>
+<body>
+  <main class="panel">
+    <h1>OTA Update</h1>
+    <p>Select the compiled firmware <code>.bin</code> file and upload it directly from your phone while connected to the robot AP.</p>
+    <input id="firmware" type="file" accept=".bin,application/octet-stream">
+    <button id="upload">Upload Firmware</button>
+    <progress id="progress" value="0" max="100" hidden></progress>
+    <div id="status" class="status"></div>
+    <p style="margin-top:16px;"><a href="/">Back to control page</a></p>
+  </main>
+
+  <script>
+    const fileInput = document.getElementById('firmware');
+    const uploadButton = document.getElementById('upload');
+    const progress = document.getElementById('progress');
+    const statusEl = document.getElementById('status');
+
+    function setStatus(message, kind = '') {
+      statusEl.textContent = message;
+      statusEl.className = `status ${kind}`;
+    }
+
+    uploadButton.addEventListener('click', () => {
+      const file = fileInput.files[0];
+      if (!file) {
+        setStatus('Choose a .bin firmware file first.', 'bad');
+        return;
+      }
+
+      uploadButton.disabled = true;
+      progress.hidden = false;
+      progress.value = 0;
+      setStatus('Uploading firmware...');
+
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', '/update');
+      xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+      xhr.setRequestHeader('X-Filename', encodeURIComponent(file.name));
+
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable) {
+          progress.value = Math.round((event.loaded / event.total) * 100);
+        }
+      };
+
+      xhr.onload = () => {
+        uploadButton.disabled = false;
+        if (xhr.status === 200) {
+          progress.value = 100;
+          setStatus('Update complete. Device is rebooting now.', 'ok');
+        } else {
+          setStatus(`Update failed: ${xhr.responseText || xhr.status}`, 'bad');
+        }
+      };
+
+      xhr.onerror = () => {
+        uploadButton.disabled = false;
+        setStatus('Upload failed. Check the Wi-Fi connection and try again.', 'bad');
+      };
+
+      xhr.send(file);
+    });
+  </script>
+</body>
+</html>
+)HTML";
+
 void setCorsHeaders(httpd_req_t *req) {
   httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
   httpd_resp_set_hdr(req, "Access-Control-Allow-Headers", "Content-Type");
@@ -614,6 +769,12 @@ esp_err_t indexHandler(httpd_req_t *req) {
   setCorsHeaders(req);
   httpd_resp_set_type(req, "text/html; charset=utf-8");
   return httpd_resp_send(req, CONTROL_PAGE, HTTPD_RESP_USE_STRLEN);
+}
+
+esp_err_t updatePageHandler(httpd_req_t *req) {
+  setCorsHeaders(req);
+  httpd_resp_set_type(req, "text/html; charset=utf-8");
+  return httpd_resp_send(req, UPDATE_PAGE, HTTPD_RESP_USE_STRLEN);
 }
 
 esp_err_t statusHandler(httpd_req_t *req) {
@@ -706,6 +867,57 @@ esp_err_t jsonCommandHandler(httpd_req_t *req) {
   return httpd_resp_send(req, "Command forwarded to motor controller", HTTPD_RESP_USE_STRLEN);
 }
 
+esp_err_t updateUploadHandler(httpd_req_t *req) {
+  if (req->content_len <= 0) {
+    return sendBadRequest(req, "Firmware body is empty");
+  }
+
+  setCorsHeaders(req);
+  httpd_resp_set_type(req, "text/plain; charset=utf-8");
+
+  if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
+    httpd_resp_set_status(req, "500 Internal Server Error");
+    return httpd_resp_send(req, Update.errorString(), HTTPD_RESP_USE_STRLEN);
+  }
+
+  int remaining = req->content_len;
+  while (remaining > 0) {
+    uint8_t buffer[1024];
+    const int to_read = remaining > static_cast<int>(sizeof(buffer)) ? sizeof(buffer) : remaining;
+    const int received = httpd_req_recv(req, reinterpret_cast<char *>(buffer), to_read);
+
+    if (received <= 0) {
+      Update.abort();
+      if (received == HTTPD_SOCK_ERR_TIMEOUT) {
+        httpd_resp_send_408(req);
+      } else {
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        httpd_resp_send(req, "Upload receive failed", HTTPD_RESP_USE_STRLEN);
+      }
+      return ESP_FAIL;
+    }
+
+    if (Update.write(buffer, received) != static_cast<size_t>(received)) {
+      Update.abort();
+      httpd_resp_set_status(req, "500 Internal Server Error");
+      return httpd_resp_send(req, Update.errorString(), HTTPD_RESP_USE_STRLEN);
+    }
+
+    remaining -= received;
+  }
+
+  if (!Update.end(true)) {
+    httpd_resp_set_status(req, "500 Internal Server Error");
+    return httpd_resp_send(req, Update.errorString(), HTTPD_RESP_USE_STRLEN);
+  }
+
+  httpd_resp_set_status(req, "200 OK");
+  httpd_resp_send(req, "Update successful. Rebooting.", HTTPD_RESP_USE_STRLEN);
+  delay(200);
+  ESP.restart();
+  return ESP_OK;
+}
+
 }  // namespace
 
 void startControlServer() {
@@ -726,6 +938,13 @@ void startControlServer() {
     .user_ctx = NULL
   };
 
+  httpd_uri_t update_page_uri = {
+    .uri = "/update",
+    .method = HTTP_GET,
+    .handler = updatePageHandler,
+    .user_ctx = NULL
+  };
+
   httpd_uri_t keypress_uri = {
     .uri = "/keypress",
     .method = HTTP_GET,
@@ -737,6 +956,13 @@ void startControlServer() {
     .uri = "/json_command",
     .method = HTTP_POST,
     .handler = jsonCommandHandler,
+    .user_ctx = NULL
+  };
+
+  httpd_uri_t update_upload_uri = {
+    .uri = "/update",
+    .method = HTTP_POST,
+    .handler = updateUploadHandler,
     .user_ctx = NULL
   };
 
@@ -764,8 +990,10 @@ void startControlServer() {
   if (httpd_start(&control_httpd, &config) == ESP_OK) {
     httpd_register_uri_handler(control_httpd, &index_uri);
     httpd_register_uri_handler(control_httpd, &status_uri);
+    httpd_register_uri_handler(control_httpd, &update_page_uri);
     httpd_register_uri_handler(control_httpd, &keypress_uri);
     httpd_register_uri_handler(control_httpd, &json_command_uri);
+    httpd_register_uri_handler(control_httpd, &update_upload_uri);
     httpd_register_uri_handler(control_httpd, &removed_camera_uri);
     httpd_register_uri_handler(control_httpd, &removed_stream_uri);
     httpd_register_uri_handler(control_httpd, &removed_control_uri);
