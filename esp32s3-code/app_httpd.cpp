@@ -337,7 +337,7 @@ const char CONTROL_PAGE[] PROGMEM = R"HTML(
         return { N: 102, D1: 4, D2: speed };
       }
 
-      return { H: 1, N: 1, D1: 0, D2: 0, D3: 1 };
+      return { N: 100 };
     }
 
     function buildKeyboardDriveCommand() {
@@ -441,7 +441,7 @@ const char CONTROL_PAGE[] PROGMEM = R"HTML(
       if (shoulderStop) {
         return {
           active: true,
-          command: { H: 1, N: 1, D1: 0, D2: 0, D3: 1 },
+          command: { N: 100 },
           signature: 'stop'
         };
       }
@@ -515,7 +515,7 @@ const char CONTROL_PAGE[] PROGMEM = R"HTML(
           if (['w', 'a', 's', 'd'].includes(key)) {
             await handleDriveKeyDown(key);
           } else if (key === 'x') {
-            await sendImmediateCommand({ H: 1, N: 1, D1: 0, D2: 0, D3: 1 }, `Sent ${key.toUpperCase()} stop`);
+            await sendImmediateCommand({ N: 100 }, `Sent ${key.toUpperCase()} stop`);
           }
         } catch (error) {
           setLog(error.message, true);
@@ -528,7 +528,7 @@ const char CONTROL_PAGE[] PROGMEM = R"HTML(
           if (['w', 'a', 's', 'd'].includes(key)) {
             await handleDriveKeyDown(key);
           } else if (key === 'x') {
-            await sendImmediateCommand({ H: 1, N: 1, D1: 0, D2: 0, D3: 1 }, `Sent ${key.toUpperCase()} stop`);
+            await sendImmediateCommand({ N: 100 }, `Sent ${key.toUpperCase()} stop`);
           }
         } catch (error) {
           setLog(error.message, true);
@@ -552,6 +552,8 @@ const char CONTROL_PAGE[] PROGMEM = R"HTML(
       button.addEventListener('mouseup', release);
       button.addEventListener('mouseleave', release);
       button.addEventListener('touchend', release, { passive: false });
+      button.addEventListener('touchcancel', release, { passive: false });
+      button.addEventListener('pointercancel', release);
     });
 
     document.addEventListener('keydown', async (event) => {
@@ -569,7 +571,7 @@ const char CONTROL_PAGE[] PROGMEM = R"HTML(
         if (['w', 'a', 's', 'd'].includes(key)) {
           await handleDriveKeyDown(key);
         } else if (key === 'x') {
-          await sendImmediateCommand({ H: 1, N: 1, D1: 0, D2: 0, D3: 1 }, `Sent ${key.toUpperCase()} stop`);
+          await sendImmediateCommand({ N: 100 }, `Sent ${key.toUpperCase()} stop`);
         }
       } catch (error) {
         setLog(error.message, true);

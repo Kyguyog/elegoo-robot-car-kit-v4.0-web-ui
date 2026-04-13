@@ -1,42 +1,214 @@
 /*
- * @Author: ELEGOO
- * @Date: 2019-10-22 11:59:09
- * @LastEditTime: 2020-12-18 14:14:35
- * @LastEditors: Changhua
- * @Description: Smart Robot Car V4.0
- * @FilePath: 
+ * Minimal UNO bridge for ESP32S3 control.
+ * Supports motors, RGB LED, mode button, and battery voltage reporting.
  */
-#include <avr/wdt.h>
-#include "ApplicationFunctionSet_xxx0.h"
 
-void setup()
-{
-  // put your setup code here, to run once:
-  Application_FunctionSet.ApplicationFunctionSet_Init();
-  wdt_enable(WDTO_2S);
+#include <FastLED.h>
+
+#define PIN_RBGLED 4
+#define NUM_LEDS 1
+#define MOTOR_PWMA 5
+#define MOTOR_PWMB 6
+#define MOTOR_AIN1 7
+#define MOTOR_BIN1 8
+#define MOTOR_STBY 3
+#define PIN_BUTTON 2
+#define PIN_BATTERY A3
+#define SERIAL_BAUD 9600
+
+CRGB leds[NUM_LEDS];
+
+static const uint8_t CMD_MOTOR = 102;
+static unsigned long lastStatusMillis = 0;
+static bool lastButtonState = false;
+static float lastBatteryVoltage = 0.0f;
+static String lineBuffer;
+static uint8_t lastSpeed = 180;
+
+void stopMotor() {
+  digitalWrite(MOTOR_STBY, LOW);
+  analogWrite(MOTOR_PWMA, 0);
+  analogWrite(MOTOR_PWMB, 0);
 }
 
-void loop()
-{
-  //put your main code here, to run repeatedly :
-  wdt_reset();
-  Application_FunctionSet.ApplicationFunctionSet_SensorDataUpdate();
-  Application_FunctionSet.ApplicationFunctionSet_KeyCommand();
-  Application_FunctionSet.ApplicationFunctionSet_RGB();
-  Application_FunctionSet.ApplicationFunctionSet_Follow();
-  Application_FunctionSet.ApplicationFunctionSet_Obstacle();
-  Application_FunctionSet.ApplicationFunctionSet_Tracking();
-  Application_FunctionSet.ApplicationFunctionSet_Rocker();
-  Application_FunctionSet.ApplicationFunctionSet_Standby();
-  Application_FunctionSet.ApplicationFunctionSet_IRrecv();
-  Application_FunctionSet.ApplicationFunctionSet_SerialPortDataAnalysis();
+void motorDrive(uint8_t directionCode, uint8_t speed) {
+  bool aForward = false;
+  bool bForward = false;
 
-  Application_FunctionSet.CMD_ServoControl_xxx0();
-  Application_FunctionSet.CMD_MotorControl_xxx0();
-  Application_FunctionSet.CMD_CarControlTimeLimit_xxx0();
-  Application_FunctionSet.CMD_CarControlNoTimeLimit_xxx0();
-  Application_FunctionSet.CMD_MotorControlSpeed_xxx0();
-  Application_FunctionSet.CMD_LightingControlTimeLimit_xxx0();
-  Application_FunctionSet.CMD_LightingControlNoTimeLimit_xxx0();
-  Application_FunctionSet.CMD_ClearAllFunctions_xxx0();
+  switch (directionCode) {
+    case 1: // forward
+      aForward = true;
+      bForward = true;
+      break;
+    case 2: // backward
+      aForward = false;
+      bForward = false;
+      break;
+    case 3: // turn left in place
+      aForward = false;
+      bForward = true;
+      break;
+    case 4: // turn right in place
+      aForward = true;
+      bForward = false;
+      break;
+    case 5: // left-forward
+      aForward = true;
+      bForward = true;
+      break;
+    case 6: // left-backward
+      aForward = false;
+      bForward = false;
+      break;
+    case 7: // right-forward
+      aForward = true;
+      bForward = true;
+      break;
+    case 8: // right-backward
+      aForward = false;
+      bForward = false;
+      break;
+    default:
+      stopMotor();
+      return;
+  }
+
+  digitalWrite(MOTOR_STBY, HIGH);
+  digitalWrite(MOTOR_AIN1, aForward ? HIGH : LOW);
+  analogWrite(MOTOR_PWMA, speed);
+  digitalWrite(MOTOR_BIN1, bForward ? HIGH : LOW);
+  analogWrite(MOTOR_PWMB, speed);
+}
+
+void setRgb(uint8_t r, uint8_t g, uint8_t b) {
+  leds[0] = CRGB(r, g, b);
+  FastLED.show();
+}
+
+float readBatteryVoltage() {
+  return analogRead(PIN_BATTERY) * 0.0375f;
+}
+
+bool readButtonPressed() {
+  return digitalRead(PIN_BUTTON) == LOW;
+}
+
+bool parseJsonInt(const String &text, const char *key, int &value) {
+  int idx = text.indexOf(key);
+  if (idx < 0) return false;
+  idx += strlen(key);
+  idx = text.indexOf(':', idx);
+  if (idx < 0) return false;
+  idx++;
+  while (idx < text.length() && (text[idx] == ' ' || text[idx] == '\t')) idx++;
+  int start = idx;
+  if (idx < text.length() && (text[idx] == '-' || text[idx] == '+')) idx++;
+  while (idx < text.length() && (text[idx] >= '0' && text[idx] <= '9')) idx++;
+  if (idx == start) return false;
+  value = text.substring(start, idx).toInt();
+  return true;
+}
+
+void sendStatus() {
+  bool buttonPressed = readButtonPressed();
+  float voltage = readBatteryVoltage();
+  float diff = voltage - lastBatteryVoltage;
+  if (buttonPressed == lastButtonState && diff > -0.05f && diff < 0.05f) {
+    return;
+  }
+  lastButtonState = buttonPressed;
+  lastBatteryVoltage = voltage;
+
+  Serial.print("{\"BTN\":");
+  Serial.print(buttonPressed ? 1 : 0);
+  Serial.print(",\"V\":");
+  Serial.print(voltage, 2);
+  Serial.println("}");
+}
+
+void processCommand(const String &cmd) {
+  String text = cmd;
+  text.trim();
+  if (text.length() == 0) return;
+
+  if (text.equalsIgnoreCase("w") || text.equalsIgnoreCase("a") || text.equalsIgnoreCase("s") || text.equalsIgnoreCase("d") || text.equalsIgnoreCase("x")) {
+    lastSpeed = constrain(lastSpeed, 0, 255);
+    if (text.equalsIgnoreCase("w")) {
+      motorDrive(1, lastSpeed);
+    } else if (text.equalsIgnoreCase("s")) {
+      motorDrive(2, lastSpeed);
+    } else if (text.equalsIgnoreCase("a")) {
+      motorDrive(3, lastSpeed);
+    } else if (text.equalsIgnoreCase("d")) {
+      motorDrive(4, lastSpeed);
+    } else {
+      stopMotor();
+    }
+    return;
+  }
+
+  int command = 0;
+  int direction = 0;
+  int speed = -1;
+  int red = -1;
+  int green = -1;
+  int blue = -1;
+
+  if (parseJsonInt(text, "N", command)) {
+    if (command == 100 || command == 1) {
+      stopMotor();
+      return;
+    }
+  }
+  parseJsonInt(text, "D1", direction);
+  parseJsonInt(text, "D2", speed);
+  parseJsonInt(text, "R", red);
+  parseJsonInt(text, "G", green);
+  parseJsonInt(text, "B", blue);
+
+  if (command == CMD_MOTOR && direction > 0 && speed >= 0) {
+    lastSpeed = constrain(speed, 0, 255);
+    motorDrive(direction, lastSpeed);
+  }
+
+  if (red >= 0 || green >= 0 || blue >= 0) {
+    setRgb(red < 0 ? 0 : constrain(red, 0, 255),
+           green < 0 ? 0 : constrain(green, 0, 255),
+           blue < 0 ? 0 : constrain(blue, 0, 255));
+  }
+}
+
+void setup() {
+  pinMode(MOTOR_PWMA, OUTPUT);
+  pinMode(MOTOR_PWMB, OUTPUT);
+  pinMode(MOTOR_AIN1, OUTPUT);
+  pinMode(MOTOR_BIN1, OUTPUT);
+  pinMode(MOTOR_STBY, OUTPUT);
+  pinMode(PIN_BUTTON, INPUT_PULLUP);
+  pinMode(PIN_BATTERY, INPUT);
+
+  FastLED.addLeds<NEOPIXEL, PIN_RBGLED>(leds, NUM_LEDS);
+  setRgb(0, 0, 0);
+
+  Serial.begin(SERIAL_BAUD);
+  stopMotor();
+}
+
+void loop() {
+  while (Serial.available()) {
+    char c = Serial.read();
+    if (c == '\r') {
+      continue;
+    }
+    lineBuffer += c;
+    if (c == '}' || c == '\n') {
+      processCommand(lineBuffer);
+      lineBuffer = "";
+    }
+  }
+
+  if (millis() - lastStatusMillis > 2000) {
+    lastStatusMillis = millis();
+    sendStatus();
+  }
 }
