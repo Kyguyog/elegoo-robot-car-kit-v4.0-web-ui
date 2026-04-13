@@ -32,52 +32,66 @@ void stopMotor() {
 }
 
 void motorDrive(uint8_t directionCode, uint8_t speed) {
-  bool aForward = false;
-  bool bForward = false;
-
-  switch (directionCode) {
-    case 1: // forward
-      aForward = true;
-      bForward = true;
-      break;
-    case 2: // backward
-      aForward = false;
-      bForward = false;
-      break;
-    case 3: // turn left in place
-      aForward = false;
-      bForward = true;
-      break;
-    case 4: // turn right in place
-      aForward = true;
-      bForward = false;
-      break;
-    case 5: // left-forward
-      aForward = true;
-      bForward = true;
-      break;
-    case 6: // left-backward
-      aForward = false;
-      bForward = false;
-      break;
-    case 7: // right-forward
-      aForward = true;
-      bForward = true;
-      break;
-    case 8: // right-backward
-      aForward = false;
-      bForward = false;
-      break;
-    default:
-      stopMotor();
-      return;
+  uint8_t reducedSpeed = speed / 2;
+  if (reducedSpeed == 0) {
+    reducedSpeed = 1;
   }
 
   digitalWrite(MOTOR_STBY, HIGH);
-  digitalWrite(MOTOR_AIN1, aForward ? HIGH : LOW);
-  analogWrite(MOTOR_PWMA, speed);
-  digitalWrite(MOTOR_BIN1, bForward ? HIGH : LOW);
-  analogWrite(MOTOR_PWMB, speed);
+
+  switch (directionCode) {
+    case 1: // forward
+      digitalWrite(MOTOR_AIN1, HIGH);
+      analogWrite(MOTOR_PWMA, speed);
+      digitalWrite(MOTOR_BIN1, HIGH);
+      analogWrite(MOTOR_PWMB, speed);
+      break;
+    case 2: // backward
+      digitalWrite(MOTOR_AIN1, LOW);
+      analogWrite(MOTOR_PWMA, speed);
+      digitalWrite(MOTOR_BIN1, LOW);
+      analogWrite(MOTOR_PWMB, speed);
+      break;
+    case 3: // turn left in place
+      digitalWrite(MOTOR_AIN1, LOW);
+      analogWrite(MOTOR_PWMA, speed);
+      digitalWrite(MOTOR_BIN1, HIGH);
+      analogWrite(MOTOR_PWMB, speed);
+      break;
+    case 4: // turn right in place
+      digitalWrite(MOTOR_AIN1, HIGH);
+      analogWrite(MOTOR_PWMA, speed);
+      digitalWrite(MOTOR_BIN1, LOW);
+      analogWrite(MOTOR_PWMB, speed);
+      break;
+    case 5: // left-forward
+      digitalWrite(MOTOR_AIN1, HIGH);
+      analogWrite(MOTOR_PWMA, speed);
+      digitalWrite(MOTOR_BIN1, HIGH);
+      analogWrite(MOTOR_PWMB, reducedSpeed);
+      break;
+    case 6: // left-backward
+      digitalWrite(MOTOR_AIN1, LOW);
+      analogWrite(MOTOR_PWMA, speed);
+      digitalWrite(MOTOR_BIN1, LOW);
+      analogWrite(MOTOR_PWMB, reducedSpeed);
+      break;
+    case 7: // right-forward
+      digitalWrite(MOTOR_AIN1, HIGH);
+      analogWrite(MOTOR_PWMA, reducedSpeed);
+      digitalWrite(MOTOR_BIN1, HIGH);
+      analogWrite(MOTOR_PWMB, speed);
+      break;
+    case 8: // right-backward
+      digitalWrite(MOTOR_AIN1, LOW);
+      analogWrite(MOTOR_PWMA, reducedSpeed);
+      digitalWrite(MOTOR_BIN1, LOW);
+      analogWrite(MOTOR_PWMB, speed);
+      break;
+    default:
+      stopMotor();
+      break;
+  }
 }
 
 void setRgb(uint8_t r, uint8_t g, uint8_t b) {

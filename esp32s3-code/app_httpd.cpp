@@ -311,30 +311,30 @@ const char CONTROL_PAGE[] PROGMEM = R"HTML(
 
       if (forward) {
         if (left && !right) {
-          return { N: 102, D1: 5, D2: speed };
+          return { N: 102, D1: 7, D2: speed };
         }
         if (!left && right) {
-          return { N: 102, D1: 7, D2: speed };
+          return { N: 102, D1: 5, D2: speed };
         }
         return { N: 102, D1: 1, D2: speed };
       }
 
       if (reverse) {
         if (left && !right) {
-          return { N: 102, D1: 6, D2: speed };
+          return { N: 102, D1: 8, D2: speed };
         }
         if (!left && right) {
-          return { N: 102, D1: 8, D2: speed };
+          return { N: 102, D1: 6, D2: speed };
         }
         return { N: 102, D1: 2, D2: speed };
       }
 
       if (left && !right) {
-        return { N: 102, D1: 3, D2: speed };
+        return { N: 102, D1: 4, D2: speed };
       }
 
       if (!left && right) {
-        return { N: 102, D1: 4, D2: speed };
+        return { N: 102, D1: 3, D2: speed };
       }
 
       return { N: 100 };
