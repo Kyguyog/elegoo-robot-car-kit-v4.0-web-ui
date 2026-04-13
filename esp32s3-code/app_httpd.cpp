@@ -244,13 +244,13 @@ const char CONTROL_PAGE[] PROGMEM = R"HTML(
         <div class="label">Drive Pad</div>
         <div class="pad">
           <div></div>
-          <button class="key accent" data-key="w">W</button>
+          <button class="key accent" data-key="w">↑</button>
           <div></div>
-          <button class="key teal" data-key="a">A</button>
+          <button class="key teal" data-key="a">←</button>
           <button class="key danger" data-key="x">STOP</button>
-          <button class="key teal" data-key="d">D</button>
+          <button class="key teal" data-key="d">→</button>
           <div></div>
-          <button class="key accent" data-key="s">S</button>
+          <button class="key accent" data-key="s">↓</button>
           <div></div>
         </div>
         <div class="row">
@@ -773,10 +773,8 @@ const char NETWORK_PAGE[] PROGMEM = R"HTML(
   <div class="wrap">
     <section class="panel">
       <h1>Network Settings</h1>
-      <p>Inspect the current connection, scan nearby Wi-Fi networks, and choose whether the robot should boot in STA or AP mode.</p>
       <div class="row">
         <a class="nav-button secondary" href="/">Back to Control</a>
-        <a class="nav-button secondary" href="/update">Open OTA Update</a>
         <button id="refreshNetworks" type="button">Scan Nearby Networks</button>
       </div>
       <div class="stats">
@@ -805,7 +803,6 @@ const char NETWORK_PAGE[] PROGMEM = R"HTML(
 
     <section class="panel">
       <div class="label">Saved Settings</div>
-      <div class="hint">The STA password and AP password fields are prefilled with the currently saved values. Saving restarts the board to apply the new network settings.</div>
       <div class="field">
         <label for="bootMode">Boot Mode</label>
         <select id="bootMode">
