@@ -5,7 +5,7 @@
 
 
 // Join this Wi-Fi first on boot.
-#define WIFI_STA_SSID "Kyguy-Wifi-Range"
+#define WIFI_STA_SSID ""
 #define WIFI_STA_PWD ""
 
 // Bonjour / mDNS hostname when joined to your real Wi-Fi.
