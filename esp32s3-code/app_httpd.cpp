@@ -2,7 +2,7 @@
 #include "Arduino.h"
 #include <Update.h>
 #include "esp_http_server.h"
-#include "CameraWebServer_AP.h"
+#include "ControlNetwork.h"
 
 namespace {
 
@@ -237,7 +237,6 @@ const char CONTROL_PAGE[] PROGMEM = R"HTML(
         <a class="nav-button" href="/network-settings">Open Network Settings</a>
         <a class="nav-button" href="/update">Open OTA Update</a>
       </div>
-      <p>Drive from this page, and use the separate network page to inspect connection status, scan nearby Wi-Fi, and switch between STA and AP.</p>
     </section>
 
     <div class="grid">
@@ -254,7 +253,6 @@ const char CONTROL_PAGE[] PROGMEM = R"HTML(
           <button class="key accent" data-key="s">S</button>
           <div></div>
         </div>
-        <div class="hint">Keyboard: <code>W A S D</code>, arrow keys, and <code>X</code> for stop. Controller: left stick turns, triggers drive, D-pad up/down changes speed, shoulders stop.</div>
         <div class="row">
           <input id="speed" type="range" min="0" max="255" value="180">
           <div class="value">Speed: <span id="speedValue">180</span></div>
@@ -268,6 +266,11 @@ const char CONTROL_PAGE[] PROGMEM = R"HTML(
     const logEl = document.getElementById('log');
     const speedEl = document.getElementById('speed');
     const speedValueEl = document.getElementById('speedValue');
+    const toggleModeButton = document.getElementById('toggleModeButton');
+
+    if (toggleModeButton) {
+      toggleModeButton.addEventListener('click', toggleNetworkMode);
+    }
 
     function setLog(message, isError = false) {
       logEl.textContent = message;
@@ -285,6 +288,21 @@ const char CONTROL_PAGE[] PROGMEM = R"HTML(
       }
       const text = await response.text();
       setLog(text || 'JSON command sent');
+    }
+
+    async function toggleNetworkMode() {
+      try {
+        const response = await fetch('/toggle_network_mode', {
+          method: 'POST'
+        });
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data.message || 'Failed to toggle network mode');
+        }
+        setLog(data.message || 'Switching network mode...');
+      } catch (err) {
+        setLog(err.message, true);
+      }
     }
 
     function pressButton(button) {
@@ -1283,6 +1301,23 @@ esp_err_t networkSettingsHandler(httpd_req_t *req) {
   return ESP_OK;
 }
 
+esp_err_t toggleNetworkModeHandler(httpd_req_t *req) {
+  String message;
+  const bool ok = toggleControlNetworkMode(message);
+  const String response = String("{\"ok\":") + (ok ? "true" : "false") + ",\"message\":\"" + jsonEscape(message) + "\"}";
+  setCorsHeaders(req);
+  httpd_resp_set_type(req, "application/json");
+  if (!ok) {
+    httpd_resp_set_status(req, "400 Bad Request");
+    return httpd_resp_send(req, response.c_str(), HTTPD_RESP_USE_STRLEN);
+  }
+
+  httpd_resp_send(req, response.c_str(), HTTPD_RESP_USE_STRLEN);
+  delay(200);
+  ESP.restart();
+  return ESP_OK;
+}
+
 esp_err_t networkSettingsGetHandler(httpd_req_t *req) {
   const IPAddress ip = getControlIpAddress();
   const String host = isControlApMode() ? String("-") : String(getControlHostName()) + ".local";
@@ -1485,6 +1520,13 @@ void startControlServer() {
     .user_ctx = NULL
   };
 
+  httpd_uri_t toggle_network_mode_uri = {
+    .uri = "/toggle_network_mode",
+    .method = HTTP_POST,
+    .handler = toggleNetworkModeHandler,
+    .user_ctx = NULL
+  };
+
   httpd_uri_t scan_networks_uri = {
     .uri = "/scan_networks",
     .method = HTTP_GET,
@@ -1529,6 +1571,7 @@ void startControlServer() {
     httpd_register_uri_handler(control_httpd, &keypress_uri);
     httpd_register_uri_handler(control_httpd, &json_command_uri);
     httpd_register_uri_handler(control_httpd, &network_settings_uri);
+    httpd_register_uri_handler(control_httpd, &toggle_network_mode_uri);
     httpd_register_uri_handler(control_httpd, &scan_networks_uri);
     httpd_register_uri_handler(control_httpd, &update_upload_uri);
     httpd_register_uri_handler(control_httpd, &removed_camera_uri);

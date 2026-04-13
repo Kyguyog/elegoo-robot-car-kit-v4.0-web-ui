@@ -19,11 +19,21 @@
 CRGB leds[NUM_LEDS];
 
 static const uint8_t CMD_MOTOR = 102;
+static const unsigned long BUTTON_DEBOUNCE_MS = 60;
 static unsigned long lastStatusMillis = 0;
 static bool lastButtonState = false;
 static float lastBatteryVoltage = 0.0f;
+static int rawButtonState = HIGH;
+static int debouncedButtonState = HIGH;
+static unsigned long buttonChangeMillis = 0;
 static String lineBuffer;
 static uint8_t lastSpeed = 180;
+static uint8_t currentR = 0;
+static uint8_t currentG = 0;
+static uint8_t currentB = 0;
+static bool blinkActive = false;
+static unsigned long blinkStart = 0;
+static const unsigned long BLINK_DURATION_MS = 120;
 
 void stopMotor() {
   digitalWrite(MOTOR_STBY, LOW);
@@ -95,16 +105,50 @@ void motorDrive(uint8_t directionCode, uint8_t speed) {
 }
 
 void setRgb(uint8_t r, uint8_t g, uint8_t b) {
+  currentR = r;
+  currentG = g;
+  currentB = b;
   leds[0] = CRGB(r, g, b);
   FastLED.show();
+}
+
+void blinkLedOnce() {
+  if (blinkActive) return;
+  blinkActive = true;
+  blinkStart = millis();
+  leds[0] = CRGB(255, 255, 255);
+  FastLED.show();
+}
+
+void updateBlink() {
+  if (!blinkActive) return;
+  if (millis() - blinkStart >= BLINK_DURATION_MS) {
+    blinkActive = false;
+    leds[0] = CRGB(currentR, currentG, currentB);
+    FastLED.show();
+  }
 }
 
 float readBatteryVoltage() {
   return analogRead(PIN_BATTERY) * 0.0375f;
 }
 
-bool readButtonPressed() {
+bool readButtonPressedRaw() {
   return digitalRead(PIN_BUTTON) == LOW;
+}
+
+bool readButtonPressed() {
+  int currentRaw = digitalRead(PIN_BUTTON);
+  if (currentRaw != rawButtonState) {
+    rawButtonState = currentRaw;
+    buttonChangeMillis = millis();
+  }
+
+  if (currentRaw != debouncedButtonState && millis() - buttonChangeMillis >= BUTTON_DEBOUNCE_MS) {
+    debouncedButtonState = currentRaw;
+  }
+
+  return debouncedButtonState == LOW;
 }
 
 bool parseJsonInt(const String &text, const char *key, int &value) {
@@ -190,6 +234,11 @@ void processCommand(const String &cmd) {
            green < 0 ? 0 : constrain(green, 0, 255),
            blue < 0 ? 0 : constrain(blue, 0, 255));
   }
+
+  int blink = 0;
+  if (parseJsonInt(text, "L", blink) && blink > 0) {
+    blinkLedOnce();
+  }
 }
 
 void setup() {
@@ -221,8 +270,10 @@ void loop() {
     }
   }
 
-  if (millis() - lastStatusMillis > 2000) {
+  if (millis() - lastStatusMillis > 150) {
     lastStatusMillis = millis();
     sendStatus();
   }
+
+  updateBlink();
 }

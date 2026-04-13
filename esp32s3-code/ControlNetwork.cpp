@@ -1,4 +1,4 @@
-#include "CameraWebServer_AP.h"
+#include "ControlNetwork.h"
 #include <ESPmDNS.h>
 #include <Preferences.h>
 #include "esp_system.h"
@@ -211,7 +211,18 @@ bool saveControlNetworkSettings(
   return true;
 }
 
-void CameraWebServer_AP::CameraWebServer_AP_Init(void) {
+bool toggleControlNetworkMode(String &message) {
+  const String nextMode = isControlApMode() ? "sta" : "ap";
+  return saveControlNetworkSettings(
+    nextMode,
+    getConfiguredStaSsid(),
+    getConfiguredStaPassword(),
+    getConfiguredApSsid(),
+    getConfiguredApPassword(),
+    message);
+}
+
+void ControlNetwork::ControlNetwork_Init(void) {
   Serial.setDebugOutput(true);
 
   uint64_t chipid = ESP.getEfuseMac();

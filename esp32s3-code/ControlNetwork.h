@@ -7,8 +7,8 @@
  * @LastEditTime: 2020-07-23 14:21:48
  */
 
-#ifndef _CameraWebServer_AP_H
-#define _CameraWebServer_AP_H
+#ifndef _CONTROL_NETWORK_H
+#define _CONTROL_NETWORK_H
 #include <WiFi.h>
 #include "config.h"
 
@@ -30,12 +30,13 @@ bool saveControlNetworkSettings(
   const String &apSsid,
   const String &apPassword,
   String &message);
+bool toggleControlNetworkMode(String &message);
 
-class CameraWebServer_AP
+class ControlNetwork
 {
 
 public:
-  void CameraWebServer_AP_Init(void);
+  void ControlNetwork_Init(void);
   String wifi_name;
 };
 

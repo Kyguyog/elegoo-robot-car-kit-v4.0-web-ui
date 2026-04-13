@@ -7,13 +7,65 @@
  * @LastEditTime: 2023-10-23
  */
 //#include <EEPROM.h>
-#include "CameraWebServer_AP.h"
+#include "ControlNetwork.h"
 #include <WiFi.h>
 WiFiServer server(100);
 
 #define RXD2 3
 #define TXD2 40
-CameraWebServer_AP CameraWebServerAP;
+ControlNetwork controlNetwork;
+static bool lastButtonPressed = false;
+
+bool parseJsonInt(const String &text, const char *key, int &value) {
+  int idx = text.indexOf(key);
+  if (idx < 0) return false;
+  idx += strlen(key);
+  idx = text.indexOf(':', idx);
+  if (idx < 0) return false;
+  idx++;
+  while (idx < text.length() && (text[idx] == ' ' || text[idx] == '\t' || text[idx] == '"')) idx++;
+  int start = idx;
+  if (idx < text.length() && (text[idx] == '-' || text[idx] == '+')) idx++;
+  while (idx < text.length() && (text[idx] >= '0' && text[idx] <= '9')) idx++;
+  if (idx == start) return false;
+  value = text.substring(start, idx).toInt();
+  return true;
+}
+
+void handleUnoButtonMessage(const String &message) {
+  int button = 0;
+  if (!parseJsonInt(message, "BTN", button)) {
+    return;
+  }
+  const bool pressed = button != 0;
+  if (!pressed && lastButtonPressed) {
+    String result;
+    const bool ok = toggleControlNetworkMode(result);
+    if (ok) {
+      Serial.println("UNO button toggled network mode");
+      sendRgbModeIndicator(!isControlApMode());
+      Serial2.flush();
+    } else {
+      Serial.print("Network toggle failed: ");
+      Serial.println(result);
+    }
+    ESP.restart();
+  }
+  lastButtonPressed = pressed;
+}
+
+void sendRgbModeIndicator(bool apMode) {
+  const uint8_t r = apMode ? 255 : 28;
+  const uint8_t g = apMode ? 48 : 180;
+  const uint8_t b = apMode ? 20 : 255;
+  Serial2.print("{\"R\":");
+  Serial2.print(r);
+  Serial2.print(",\"G\":");
+  Serial2.print(g);
+  Serial2.print(",\"B\":");
+  Serial2.print(b);
+  Serial2.print("}");
+}
 
 bool WA_en = false;
 
@@ -66,8 +118,12 @@ void SocketServer_Test(void)
         sendBuff += c;
         if (c == '}') //接收到结束字符
         {
-          client.print(sendBuff);
-          Serial.print(sendBuff); //从串口打印
+          if (sendBuff.indexOf("\"BTN\"") >= 0) {
+            handleUnoButtonMessage(sendBuff);
+          } else {
+            client.print(sendBuff);
+            Serial.print(sendBuff); //从串口打印
+          }
           sendBuff = "";
         }
       }
@@ -137,9 +193,12 @@ void FactoryTest(void)
       else if (true == readBuff.equals("{WA_detection}"))
       {
         Serial2.print("{");
-        Serial2.print(CameraWebServerAP.wifi_name);
+        Serial2.print(controlNetwork.wifi_name);
         Serial2.print("}");
         Serial.println("Factory...");
+      }
+      else if (readBuff.indexOf("\"BTN\"") >= 0) {
+        handleUnoButtonMessage(readBuff);
       }
       readBuff = "";
     }
@@ -187,9 +246,13 @@ void setup()
   Serial.print("network_id:");
   Serial2.begin(9600, SERIAL_8N1, RXD2, TXD2);
   // Control UI: http://robotcar.local/ or AP fallback IP.
-  CameraWebServerAP.CameraWebServer_AP_Init();
+  controlNetwork.ControlNetwork_Init();
+  sendRgbModeIndicator(isControlApMode());
+  Serial2.flush();
   server.begin();
   delay(100);
+  Serial2.print("{\"L\":1}");
+  Serial2.flush();
   // while (Serial.read() >= 0)
   // {
   //   /*清空串口缓存...*/
