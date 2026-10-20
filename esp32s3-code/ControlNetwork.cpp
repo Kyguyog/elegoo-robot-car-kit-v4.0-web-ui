@@ -97,6 +97,7 @@ bool connectToWifiStation(const char *ssid, const char *password) {
 
   g_control_ap_mode = false;
   g_control_network_name = WiFi.SSID();
+  WiFi.setSleep(false);
 
   if (!MDNS.begin(WIFI_HOSTNAME)) {
     Serial.println("mDNS start failed");
@@ -112,6 +113,7 @@ void startFallbackAccessPoint(const String &fallbackSsid, const char *password) 
   stopMdnsIfRunning();
   WiFi.mode(WIFI_AP_STA);
   WiFi.softAP(fallbackSsid.c_str(), password, WIFI_CHANNEL);
+  WiFi.setSleep(false);
   g_control_ap_mode = true;
   g_control_network_name = fallbackSsid;
 }
@@ -239,6 +241,7 @@ void ControlNetwork::ControlNetwork_Init(void) {
   const String fallback_ssid = buildFallbackApName();
 
   WiFi.setTxPower(WIFI_POWER_19_5dBm);
+  WiFi.setSleep(false);
   bool sta_connected = false;
   if (g_preferred_mode == "sta") {
     sta_connected = connectToWifiStation(g_sta_ssid.c_str(), g_sta_password.c_str());

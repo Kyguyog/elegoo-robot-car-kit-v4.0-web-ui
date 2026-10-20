@@ -34,11 +34,15 @@ static uint8_t currentB = 0;
 static bool blinkActive = false;
 static unsigned long blinkStart = 0;
 static const unsigned long BLINK_DURATION_MS = 120;
+static bool motorsEngaged = false;
+static unsigned long lastCommandMillis = 0;
+static const unsigned long COMMAND_TIMEOUT_MS = 350;
 
 void stopMotor() {
   digitalWrite(MOTOR_STBY, LOW);
   analogWrite(MOTOR_PWMA, 0);
   analogWrite(MOTOR_PWMB, 0);
+  motorsEngaged = false;
 }
 
 void motorDrive(uint8_t directionCode, uint8_t speed) {
@@ -47,6 +51,8 @@ void motorDrive(uint8_t directionCode, uint8_t speed) {
     reducedSpeed = 1;
   }
 
+  motorsEngaged = true;
+  lastCommandMillis = millis();
   digitalWrite(MOTOR_STBY, HIGH);
 
   switch (directionCode) {
@@ -268,6 +274,10 @@ void loop() {
       processCommand(lineBuffer);
       lineBuffer = "";
     }
+  }
+
+  if (motorsEngaged && millis() - lastCommandMillis > COMMAND_TIMEOUT_MS) {
+    stopMotor();
   }
 
   if (millis() - lastStatusMillis > 150) {

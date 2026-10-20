@@ -2,6 +2,7 @@
 #include "Arduino.h"
 #include <Update.h>
 #include "esp_http_server.h"
+#include <lwip/sockets.h>
 #include "ControlNetwork.h"
 
 namespace {
@@ -257,6 +258,9 @@ const char CONTROL_PAGE[] PROGMEM = R"HTML(
           <input id="speed" type="range" min="0" max="255" value="180">
           <div class="value">Speed: <span id="speedValue">180</span></div>
         </div>
+        <div class="row">
+          <div class="value">Link: <span id="latency">-</span></div>
+        </div>
         <div class="log" id="log"></div>
       </section>
     </div>
@@ -266,6 +270,7 @@ const char CONTROL_PAGE[] PROGMEM = R"HTML(
     const logEl = document.getElementById('log');
     const speedEl = document.getElementById('speed');
     const speedValueEl = document.getElementById('speedValue');
+    const latencyEl = document.getElementById('latency');
     const toggleModeButton = document.getElementById('toggleModeButton');
 
     if (toggleModeButton) {
@@ -277,17 +282,10 @@ const char CONTROL_PAGE[] PROGMEM = R"HTML(
       logEl.style.color = isError ? '#ff8da1' : '#2ec4b6';
     }
 
-    async function sendJson(payload) {
-      const response = await fetch('/json_command', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: payload
-      });
-      if (!response.ok) {
-        throw new Error(`JSON send failed: ${response.status}`);
-      }
-      const text = await response.text();
-      setLog(text || 'JSON command sent');
+    function renderLatency(ms) {
+      const rounded = Math.round(ms);
+      latencyEl.textContent = `${rounded} ms`;
+      latencyEl.style.color = rounded > 300 ? '#ff8da1' : (rounded > 150 ? '#ffcf70' : '#2ec4b6');
     }
 
     async function toggleNetworkMode() {
@@ -320,10 +318,84 @@ const char CONTROL_PAGE[] PROGMEM = R"HTML(
       d: false
     };
 
-    let lastDrivePayload = '';
+    let desiredDrivePayload = '';
+    let lastStartedDrivePayload = '';
+    let driveSendInFlight = 0;
+    const MAX_DRIVE_SEND_IN_FLIGHT = 6;
+    const DRIVE_REQUEST_TIMEOUT_MS = 2500;
+    const DRIVE_KEEPALIVE_INTERVAL_MS = 100;
+    const DRIVE_KEEPALIVE_MAX_IN_FLIGHT = 2;
+    let pendingStateChange = false;
+    let forceDriveResend = false;
+    let driveSequence = 0;
+    const driveSessionKey = Math.random().toString(36).slice(2, 10);
+    let driveSocket = null;
+    let driveSocketReady = false;
+    let driveReconnectTimer = null;
+    const pendingDriveRtt = new Map();
     let gamepadActive = false;
     let lastGamepadSignature = '';
     let lastDpadAdjustTime = 0;
+
+    function connectDriveSocket() {
+      if (driveSocket && (driveSocket.readyState === WebSocket.OPEN || driveSocket.readyState === WebSocket.CONNECTING)) {
+        return;
+      }
+      const scheme = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const socket = new WebSocket(`${scheme}//${window.location.host}/ws_drive`);
+      driveSocket = socket;
+
+      socket.addEventListener('open', () => {
+        driveSocketReady = true;
+        forceDriveResend = true;
+        setLog('Drive link connected');
+        pumpDriveSend();
+      });
+
+      socket.addEventListener('message', (event) => {
+        let seq = -1;
+        try {
+          const parsed = JSON.parse(event.data);
+          seq = typeof parsed.S === 'number' ? parsed.S : -1;
+        } catch (err) {
+          // Non-JSON frame; ignore for RTT purposes.
+        }
+        const startedAt = pendingDriveRtt.get(seq);
+        if (startedAt === undefined) {
+          return;
+        }
+        pendingDriveRtt.delete(seq);
+        driveSendInFlight = Math.max(0, driveSendInFlight - 1);
+        renderLatency(performance.now() - startedAt);
+        pumpDriveSend();
+      });
+
+      socket.addEventListener('close', () => {
+        driveSocketReady = false;
+        driveSendInFlight = 0;
+        pendingDriveRtt.clear();
+        setLog('Drive link lost, reconnecting...', true);
+        scheduleDriveReconnect();
+      });
+
+      socket.addEventListener('error', () => {
+        try {
+          socket.close();
+        } catch (err) {
+          // Close may already be in progress.
+        }
+      });
+    }
+
+    function scheduleDriveReconnect() {
+      if (driveReconnectTimer !== null) {
+        return;
+      }
+      driveReconnectTimer = window.setTimeout(() => {
+        driveReconnectTimer = null;
+        connectDriveSocket();
+      }, 300);
+    }
 
     function buildDriveCommand(forward, reverse, left, right, speed) {
 
@@ -368,13 +440,77 @@ const char CONTROL_PAGE[] PROGMEM = R"HTML(
       );
     }
 
-    async function syncDriveCommand(commandObject = null) {
-      const payload = JSON.stringify(commandObject || buildKeyboardDriveCommand());
-      if (payload === lastDrivePayload) {
+    function queueDrivePayload(payload, force = false) {
+      if (payload !== desiredDrivePayload) {
+        desiredDrivePayload = payload;
+        pendingStateChange = true;
+      }
+      if (force) {
+        pendingStateChange = true;
+        forceDriveResend = true;
+      }
+      pumpDriveSend();
+    }
+
+    function withSendSequence(payload) {
+      driveSequence += 1;
+      return payload.slice(0, -1) + ',"K":"' + driveSessionKey + '","S":' + driveSequence + '}';
+    }
+
+    function pumpDriveSend() {
+      if (desiredDrivePayload === '') {
         return;
       }
-      lastDrivePayload = payload;
-      await sendJson(payload);
+      if (!driveSocketReady || !driveSocket || driveSocket.readyState !== WebSocket.OPEN) {
+        return;
+      }
+      if (driveSendInFlight >= MAX_DRIVE_SEND_IN_FLIGHT) {
+        return;
+      }
+
+      const stateChanged = desiredDrivePayload !== lastStartedDrivePayload;
+      if (!stateChanged && !forceDriveResend) {
+        return;
+      }
+      forceDriveResend = false;
+
+      const payload = desiredDrivePayload;
+      const quiet = !pendingStateChange;
+      pendingStateChange = false;
+      lastStartedDrivePayload = payload;
+
+      const message = withSendSequence(payload);
+      const seq = driveSequence;
+      driveSendInFlight += 1;
+      pendingDriveRtt.set(seq, performance.now());
+
+      try {
+        driveSocket.send(message);
+        if (!quiet) {
+          setLog(payload);
+        }
+      } catch (error) {
+        pendingDriveRtt.delete(seq);
+        driveSendInFlight = Math.max(0, driveSendInFlight - 1);
+        driveSocketReady = false;
+        setLog(error.message, true);
+        scheduleDriveReconnect();
+        return;
+      }
+
+      window.setTimeout(() => {
+        if (!pendingDriveRtt.has(seq)) {
+          return;
+        }
+        pendingDriveRtt.delete(seq);
+        driveSendInFlight = Math.max(0, driveSendInFlight - 1);
+        pumpDriveSend();
+      }, DRIVE_REQUEST_TIMEOUT_MS);
+    }
+
+    function syncDriveCommand(commandObject = null) {
+      queueDrivePayload(JSON.stringify(commandObject || buildKeyboardDriveCommand()));
+      return Promise.resolve();
     }
 
     async function handleDriveKeyDown(key) {
@@ -398,9 +534,7 @@ const char CONTROL_PAGE[] PROGMEM = R"HTML(
     }
 
     async function sendImmediateCommand(payloadObject, label) {
-      const payload = JSON.stringify(payloadObject);
-      lastDrivePayload = payload;
-      await sendJson(payload);
+      queueDrivePayload(JSON.stringify(payloadObject), true);
       setLog(label);
     }
 
@@ -507,19 +641,17 @@ const char CONTROL_PAGE[] PROGMEM = R"HTML(
 
         if (state.active) {
           gamepadActive = true;
-          if (state.signature !== lastGamepadSignature || JSON.stringify(state.command) !== lastDrivePayload) {
-            lastGamepadSignature = state.signature;
-            syncDriveCommand(state.command).catch((error) => setLog(error.message, true));
-          }
+          lastGamepadSignature = state.signature;
+          syncDriveCommand(state.command);
         } else if (gamepadActive) {
           gamepadActive = false;
           lastGamepadSignature = '';
-          syncDriveCommand().catch((error) => setLog(error.message, true));
+          syncDriveCommand();
         }
       } else if (gamepadActive) {
         gamepadActive = false;
         lastGamepadSignature = '';
-        syncDriveCommand().catch((error) => setLog(error.message, true));
+        syncDriveCommand();
       }
 
       window.requestAnimationFrame(pollGamepad);
@@ -621,13 +753,26 @@ const char CONTROL_PAGE[] PROGMEM = R"HTML(
     });
 
     window.addEventListener('gamepaddisconnected', () => {
+      const wasDriving = gamepadActive;
       gamepadActive = false;
       lastGamepadSignature = '';
+      if (wasDriving) {
+        syncDriveCommand();
+      }
       setLog('Controller disconnected', true);
     });
 
     updateSpeedDisplay();
+    connectDriveSocket();
     window.requestAnimationFrame(pollGamepad);
+
+    window.setInterval(() => {
+      if (driveSendInFlight >= DRIVE_KEEPALIVE_MAX_IN_FLIGHT) {
+        return;
+      }
+      forceDriveResend = true;
+      pumpDriveSend();
+    }, DRIVE_KEEPALIVE_INTERVAL_MS);
   </script>
 </body>
 </html>
@@ -962,7 +1107,10 @@ const char NETWORK_PAGE[] PROGMEM = R"HTML(
     });
 
     refreshNetworkPage()
-      .then(() => setNetworkLog('Loaded current network settings.'))
+      .then(() => {
+        setNetworkLog('Loaded current network settings.');
+        return scanNetworks();
+      })
       .catch((error) => setNetworkLog(error.message, true));
   </script>
 </body>
@@ -1181,12 +1329,18 @@ bool readRequestBody(httpd_req_t *req, String &body, size_t maxLen) {
   return true;
 }
 
-String scanNetworksJsonArray() {
+String g_cachedNetworksJson = "[]";
+
+void harvestScanResults() {
+  const int status = WiFi.scanComplete();
+  if (status == WIFI_SCAN_FAILED || status == WIFI_SCAN_RUNNING) {
+    return;
+  }
+
   String json = "[";
-  const int found = WiFi.scanNetworks();
   bool first = true;
 
-  for (int i = 0; i < found; ++i) {
+  for (int i = 0; i < status; ++i) {
     const String ssid = WiFi.SSID(i);
     if (ssid.length() == 0) {
       continue;
@@ -1203,7 +1357,15 @@ String scanNetworksJsonArray() {
 
   WiFi.scanDelete();
   json += "]";
-  return json;
+  g_cachedNetworksJson = json;
+}
+
+void requestNetworkScan() {
+  harvestScanResults();
+  if (WiFi.scanComplete() == WIFI_SCAN_RUNNING) {
+    return;
+  }
+  WiFi.scanNetworks(true, false);
 }
 
 esp_err_t sendBadRequest(httpd_req_t *req, const char *message = "Bad Request") {
@@ -1215,18 +1377,21 @@ esp_err_t sendBadRequest(httpd_req_t *req, const char *message = "Bad Request") 
 
 esp_err_t indexHandler(httpd_req_t *req) {
   setCorsHeaders(req);
+  httpd_resp_set_hdr(req, "Cache-Control", "no-store");
   httpd_resp_set_type(req, "text/html; charset=utf-8");
   return httpd_resp_send(req, CONTROL_PAGE, HTTPD_RESP_USE_STRLEN);
 }
 
 esp_err_t updatePageHandler(httpd_req_t *req) {
   setCorsHeaders(req);
+  httpd_resp_set_hdr(req, "Cache-Control", "no-store");
   httpd_resp_set_type(req, "text/html; charset=utf-8");
   return httpd_resp_send(req, UPDATE_PAGE, HTTPD_RESP_USE_STRLEN);
 }
 
 esp_err_t networkPageHandler(httpd_req_t *req) {
   setCorsHeaders(req);
+  httpd_resp_set_hdr(req, "Cache-Control", "no-store");
   httpd_resp_set_type(req, "text/html; charset=utf-8");
   return httpd_resp_send(req, NETWORK_PAGE, HTTPD_RESP_USE_STRLEN);
 }
@@ -1332,7 +1497,7 @@ esp_err_t networkSettingsGetHandler(httpd_req_t *req) {
     "\",\"sta_password\":\"" + jsonEscape(getConfiguredStaPassword()) +
     "\",\"ap_ssid\":\"" + jsonEscape(getConfiguredApSsid()) +
     "\",\"ap_password\":\"" + jsonEscape(getConfiguredApPassword()) +
-    "\",\"networks\":" + scanNetworksJsonArray() +
+    "\",\"networks\":" + g_cachedNetworksJson +
     "}";
 
   setCorsHeaders(req);
@@ -1341,8 +1506,15 @@ esp_err_t networkSettingsGetHandler(httpd_req_t *req) {
 }
 
 esp_err_t scanNetworksHandler(httpd_req_t *req) {
+  requestNetworkScan();
+  const unsigned long start = millis();
+  while (WiFi.scanComplete() == WIFI_SCAN_RUNNING && millis() - start < 15000) {
+    delay(50);
+  }
+  harvestScanResults();
+
   const String response =
-    String("{\"ok\":true,\"networks\":") + scanNetworksJsonArray() + "}";
+    String("{\"ok\":true,\"networks\":") + g_cachedNetworksJson + "}";
 
   setCorsHeaders(req);
   httpd_resp_set_type(req, "application/json");
@@ -1388,20 +1560,110 @@ esp_err_t keypressHandler(httpd_req_t *req) {
   return httpd_resp_send(req, NULL, 0);
 }
 
+static String lastDriveClientKey;
+static long long lastDriveSequence = -1;
+
+// Shared by HTTP /json_command and WS /ws_drive. Returns echoed sequence (-1 if absent).
+static long long processDriveCommand(const String &body, char *resp, size_t respLen) {
+  long long sequence = -1;
+
+  const int keyIdx = body.indexOf("\"K\":\"");
+  if (keyIdx >= 0) {
+    const int keyStart = keyIdx + 5;
+    const int keyEnd = body.indexOf('"', keyStart);
+    if (keyEnd > keyStart) {
+      const String clientKey = body.substring(keyStart, keyEnd);
+      const int seqIdx = body.indexOf("\"S\":", keyEnd);
+      if (seqIdx >= 0) {
+        sequence = strtoll(body.c_str() + seqIdx + 4, NULL, 10);
+        if (clientKey != lastDriveClientKey) {
+          lastDriveClientKey = clientKey;
+          lastDriveSequence = -1;
+        }
+        if (lastDriveSequence >= 0 && sequence <= lastDriveSequence) {
+          snprintf(resp, respLen, "Stale command ignored");
+          return sequence;
+        }
+        lastDriveSequence = sequence;
+      }
+    }
+  }
+
+  Serial2.print(body);
+  Serial2.print("\n");
+  snprintf(resp, respLen, "Command forwarded to motor controller");
+  return sequence;
+}
+
 esp_err_t jsonCommandHandler(httpd_req_t *req) {
   String body;
   if (!readRequestBody(req, body, 1024)) {
     return sendBadRequest(req, "Invalid JSON body length");
   }
 
-  Serial.println("Received JSON command:");
-  Serial.println(body);
-  Serial2.print(body);
-  Serial2.print("\n");
+  const int sockfd = httpd_req_to_sockfd(req);
+  if (sockfd >= 0) {
+    const int enable = 1;
+    setsockopt(sockfd, IPPROTO_TCP, TCP_NODELAY, &enable, sizeof(enable));
+  }
+
+  char resp[64];
+  processDriveCommand(body, resp, sizeof(resp));
 
   setCorsHeaders(req);
   httpd_resp_set_type(req, "text/plain; charset=utf-8");
-  return httpd_resp_send(req, "Command forwarded to motor controller", HTTPD_RESP_USE_STRLEN);
+  return httpd_resp_send(req, resp, HTTPD_RESP_USE_STRLEN);
+}
+
+esp_err_t wsDriveHandler(httpd_req_t *req) {
+  if (req->method == HTTP_GET) {
+    const int sockfd = httpd_req_to_sockfd(req);
+    if (sockfd >= 0) {
+      const int enable = 1;
+      setsockopt(sockfd, IPPROTO_TCP, TCP_NODELAY, &enable, sizeof(enable));
+    }
+    return ESP_OK;
+  }
+
+  httpd_ws_frame_t frame;
+  esp_err_t ret = httpd_ws_recv_frame(req, &frame, 0);
+  if (ret != ESP_OK) {
+    return ret;
+  }
+
+  if (frame.type == HTTPD_WS_TYPE_CLOSE) {
+    Serial2.print("{\"N\":100}\n");
+    return ESP_OK;
+  }
+
+  if (frame.type != HTTPD_WS_TYPE_TEXT || frame.len == 0 || frame.len > 512) {
+    return ESP_OK;
+  }
+
+  char buffer[513];
+  ret = httpd_ws_recv_frame(req, &frame, frame.len);
+  if (ret != ESP_OK) {
+    return ret;
+  }
+  memcpy(buffer, frame.payload, frame.len);
+  buffer[frame.len] = '\0';
+
+  char resp[96];
+  const long long sequence = processDriveCommand(String(buffer), resp, sizeof(resp));
+
+  char out[192];
+  const int outLen = snprintf(out, sizeof(out), "{\"R\":\"%s\",\"S\":%lld}", resp, sequence);
+  if (outLen <= 0 || outLen >= static_cast<int>(sizeof(out))) {
+    return ESP_OK;
+  }
+
+  httpd_ws_frame_t outFrame = {};
+  outFrame.type = HTTPD_WS_TYPE_TEXT;
+  outFrame.payload = reinterpret_cast<uint8_t *>(out);
+  outFrame.len = static_cast<size_t>(outLen);
+  outFrame.final = true;
+  outFrame.fragmented = false;
+  return httpd_ws_send_frame(req, &outFrame);
 }
 
 esp_err_t updateUploadHandler(httpd_req_t *req) {
@@ -1459,7 +1721,7 @@ esp_err_t updateUploadHandler(httpd_req_t *req) {
 
 void startControlServer() {
   httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-  config.max_uri_handlers = 13;
+  config.max_uri_handlers = 15;
 
   httpd_uri_t index_uri = {
     .uri = "/",
@@ -1508,6 +1770,15 @@ void startControlServer() {
     .method = HTTP_POST,
     .handler = jsonCommandHandler,
     .user_ctx = NULL
+  };
+
+  httpd_uri_t ws_drive_uri = {
+    .uri = "/ws_drive",
+    .method = HTTP_GET,
+    .handler = wsDriveHandler,
+    .user_ctx = NULL,
+    .is_websocket = true,
+    .handle_ws_control_frames = true
   };
 
   httpd_uri_t network_settings_uri = {
@@ -1567,6 +1838,7 @@ void startControlServer() {
     httpd_register_uri_handler(control_httpd, &network_settings_get_uri);
     httpd_register_uri_handler(control_httpd, &keypress_uri);
     httpd_register_uri_handler(control_httpd, &json_command_uri);
+    httpd_register_uri_handler(control_httpd, &ws_drive_uri);
     httpd_register_uri_handler(control_httpd, &network_settings_uri);
     httpd_register_uri_handler(control_httpd, &toggle_network_mode_uri);
     httpd_register_uri_handler(control_httpd, &scan_networks_uri);
